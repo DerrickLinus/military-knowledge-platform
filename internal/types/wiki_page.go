@@ -653,6 +653,7 @@ type WikiGraphRequest struct {
 	Center          string   // ego mode center slug (required when Mode == "ego")
 	Depth           int      // ego mode BFS depth, >= 1
 	Types           []string // optional page_type filter; empty = no filter
+	KnowledgeIDs    []string // optional source document scope; empty = all wiki pages
 	Limit           int      // max nodes to return; <= 0 means uncapped
 }
 

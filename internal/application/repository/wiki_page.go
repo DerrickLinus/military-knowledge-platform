@@ -1151,6 +1151,30 @@ func escapeLikePattern(s string) string {
 // because they mention 王新 in their body and were updated more recently.
 // updated_at stays as the tiebreaker so same-rank ties stay deterministic.
 func (r *wikiPageRepository) Search(ctx context.Context, kbID string, query string, limit int) ([]*types.WikiPage, error) {
+	return r.search(ctx, kbID, query, nil, limit)
+}
+
+// SearchByKnowledgeIDs performs full-text search inside a source-ref scope.
+// It uses the same exact/prefix predicates as ListBySourceRef, OR-ing the
+// requested document IDs before ranking and limiting so in-scope results are
+// never crowded out by higher-ranked pages from the rest of the wiki.
+func (r *wikiPageRepository) SearchByKnowledgeIDs(
+	ctx context.Context,
+	kbID string,
+	query string,
+	knowledgeIDs []string,
+	limit int,
+) ([]*types.WikiPage, error) {
+	return r.search(ctx, kbID, query, knowledgeIDs, limit)
+}
+
+func (r *wikiPageRepository) search(
+	ctx context.Context,
+	kbID string,
+	query string,
+	knowledgeIDs []string,
+	limit int,
+) ([]*types.WikiPage, error) {
 	if limit <= 0 {
 		limit = 10
 	}
@@ -1169,18 +1193,59 @@ func (r *wikiPageRepository) Search(ctx context.Context, kbID string, query stri
 		"WHEN content ~* ? THEN 1 " +
 		"ELSE 0 END AS match_rank"
 
-	var pages []*types.WikiPage
-	if err := r.db.WithContext(ctx).
+	db := r.db.WithContext(ctx).
 		Select("*, "+rankExpr, query, query, query, query).
 		Where("knowledge_base_id = ? AND (title ~* ? OR content ~* ? OR summary ~* ? OR slug ~* ?)",
 			kbID, query, query, query, query).
-		Where("status != ?", "archived").
+		Where("status != ?", "archived")
+	if len(knowledgeIDs) > 0 {
+		var err error
+		db, err = applyWikiSourceRefFilter(db, knowledgeIDs)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var pages []*types.WikiPage
+	if err := db.
 		Order("match_rank DESC, updated_at DESC").
 		Limit(limit).
 		Find(&pages).Error; err != nil {
 		return nil, err
 	}
 	return pages, nil
+}
+
+// applyWikiSourceRefFilter adds an OR scope for both persisted SourceRefs
+// formats. Every dynamic value remains a bound parameter; only the fixed SQL
+// fragments are concatenated.
+func applyWikiSourceRefFilter(db *gorm.DB, knowledgeIDs []string) (*gorm.DB, error) {
+	conditions := make([]string, 0, len(knowledgeIDs))
+	args := make([]any, 0, len(knowledgeIDs)*2)
+	for _, knowledgeID := range knowledgeIDs {
+		knowledgeID = strings.TrimSpace(knowledgeID)
+		if knowledgeID == "" {
+			continue
+		}
+		needle, err := json.Marshal([]string{knowledgeID})
+		if err != nil {
+			return nil, fmt.Errorf("marshal source ref needle: %w", err)
+		}
+		prefix, err := json.Marshal(knowledgeID + "|")
+		if err != nil {
+			return nil, fmt.Errorf("marshal source ref prefix: %w", err)
+		}
+		prefixStr := string(prefix)
+		if len(prefixStr) >= 2 && prefixStr[len(prefixStr)-1] == '"' {
+			prefixStr = prefixStr[:len(prefixStr)-1]
+		}
+		conditions = append(conditions, "(source_refs @> ?::jsonb OR source_refs::text LIKE ?)")
+		args = append(args, string(needle), "%"+escapeLikePattern(prefixStr)+"%")
+	}
+	if len(conditions) == 0 {
+		return db, nil
+	}
+	return db.Where("("+strings.Join(conditions, " OR ")+")", args...), nil
 }
 
 // CountByType returns page counts grouped by type for a knowledge base

@@ -53,7 +53,7 @@ migration `000061_wiki_page_hierarchy.up.sql` 引入独立的 `wiki_folders` 表
 
 - `Slug`：页面在 KB 内的唯一标识（见下节）；
 - `SourceRefs`：来源引用，格式 `"<knowledge_id>|<doc_title>"`；`ChunkRefs`：分块级证据引用；
-- `InLinks` / `OutLinks`：wiki-link 反向/正向链接，维护图结构，`GET /graph` 可查询全局或 ego 视图；
+- `InLinks` / `OutLinks`：wiki-link 反向/正向链接，维护图结构，`GET /graph` 可查询全局、ego 或按 `knowledge_ids` 限定的 SourceRefs 局部视图；局部视图仅保留入选页面之间的边并重算局部度数；
 - `Aliases`：别名（用于搜索与去重合并后的旧名指向）；`Version`：版本号。
 
 ## 生成流程

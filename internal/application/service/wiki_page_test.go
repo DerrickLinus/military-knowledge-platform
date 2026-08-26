@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -394,6 +395,24 @@ func makeGraphFixture() []*types.WikiPage {
 	}
 }
 
+func makeSourceScopedGraphFixture() []*types.WikiPage {
+	pages := makeGraphFixture()
+	refs := map[string]types.StringArray{
+		"hub": {"doc-1|Requirements"},
+		"a":   {"doc-1"},
+		"b":   {"doc-2|Design"},
+		"c":   {"doc-3|Tests"},
+		"d":   {"doc-1|Requirements", "doc-2"},
+		"x":   {"doc-2"},
+		// y intentionally has no source refs and must fail closed in a
+		// source-scoped graph.
+	}
+	for _, page := range pages {
+		page.SourceRefs = refs[page.Slug]
+	}
+	return pages
+}
+
 func nodeSlugs(data *types.WikiGraphData) map[string]bool {
 	out := make(map[string]bool, len(data.Nodes))
 	for _, n := range data.Nodes {
@@ -573,5 +592,159 @@ func TestComputeGraphSubset_EgoRejectsMissingCenter(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("expected error for missing center slug")
+	}
+}
+
+func TestComputeGraphSubset_SourceScopeBuildsInducedGraphAndLocalDegrees(t *testing.T) {
+	got, err := computeGraphSubset(makeSourceScopedGraphFixture(), &types.WikiGraphRequest{
+		Mode:         types.WikiGraphModeOverview,
+		KnowledgeIDs: []string{"doc-1"},
+		Limit:        100,
+	})
+	if err != nil {
+		t.Fatalf("computeGraphSubset: %v", err)
+	}
+
+	slugs := nodeSlugs(got)
+	for _, slug := range []string{"hub", "a", "d"} {
+		if !slugs[slug] {
+			t.Errorf("expected %q in doc-1 scope, got %v", slug, slugs)
+		}
+	}
+	for _, slug := range []string{"b", "c", "x", "y"} {
+		if slugs[slug] {
+			t.Errorf("%q leaked into doc-1 scope: %v", slug, slugs)
+		}
+	}
+
+	wantEdges := map[string]bool{"hub->a": true, "hub->d": true, "a->hub": true}
+	if len(got.Edges) != len(wantEdges) {
+		t.Fatalf("edges = %+v, want %v", got.Edges, wantEdges)
+	}
+	for _, edge := range got.Edges {
+		if !wantEdges[edge.Source+"->"+edge.Target] {
+			t.Errorf("edge outside induced graph: %+v", edge)
+		}
+	}
+
+	degrees := make(map[string]int, len(got.Nodes))
+	for _, node := range got.Nodes {
+		degrees[node.Slug] = node.LinkCount
+	}
+	if degrees["hub"] != 3 || degrees["a"] != 2 || degrees["d"] != 1 {
+		t.Errorf("local degrees = %v, want hub=3 a=2 d=1", degrees)
+	}
+	if got.Meta.Total != 3 || got.Meta.Returned != 3 || got.Meta.Truncated {
+		t.Errorf("unexpected scoped meta: %+v", got.Meta)
+	}
+}
+
+func TestComputeGraphSubset_SourceScopeUsesORSemanticsAndExcludesUncitedPages(t *testing.T) {
+	got, err := computeGraphSubset(makeSourceScopedGraphFixture(), &types.WikiGraphRequest{
+		Mode:         types.WikiGraphModeOverview,
+		KnowledgeIDs: []string{"doc-1", "doc-2"},
+		Limit:        100,
+	})
+	if err != nil {
+		t.Fatalf("computeGraphSubset: %v", err)
+	}
+	slugs := nodeSlugs(got)
+	for _, slug := range []string{"hub", "a", "b", "d", "x"} {
+		if !slugs[slug] {
+			t.Errorf("expected %q in OR scope, got %v", slug, slugs)
+		}
+	}
+	if slugs["c"] || slugs["y"] {
+		t.Errorf("out-of-scope or uncited page leaked into graph: %v", slugs)
+	}
+}
+
+func TestComputeGraphSubset_SourceScopeComposesWithTypeAndLimit(t *testing.T) {
+	got, err := computeGraphSubset(makeSourceScopedGraphFixture(), &types.WikiGraphRequest{
+		Mode:         types.WikiGraphModeOverview,
+		KnowledgeIDs: []string{"doc-1", "doc-2"},
+		Types:        []string{types.WikiPageTypeEntity},
+		Limit:        2,
+	})
+	if err != nil {
+		t.Fatalf("computeGraphSubset: %v", err)
+	}
+	// a, b and x pass both filters. Their links all point to pages excluded by
+	// the type filter (or to uncited y), so every local degree is zero and the
+	// deterministic slug tiebreak keeps a then b.
+	slugs := nodeSlugs(got)
+	if !slugs["a"] || !slugs["b"] || slugs["x"] {
+		t.Errorf("unexpected type+source+limit result: %v", slugs)
+	}
+	if got.Meta.Total != 3 || !got.Meta.Truncated {
+		t.Errorf("unexpected meta: %+v", got.Meta)
+	}
+	for _, node := range got.Nodes {
+		if node.LinkCount != 0 {
+			t.Errorf("node %q local degree = %d, want 0", node.Slug, node.LinkCount)
+		}
+	}
+}
+
+func TestComputeGraphSubset_SourceScopedEgoStaysInsideScope(t *testing.T) {
+	pages := makeSourceScopedGraphFixture()
+	got, err := computeGraphSubset(pages, &types.WikiGraphRequest{
+		Mode:         types.WikiGraphModeEgo,
+		Center:       "a",
+		Depth:        1,
+		KnowledgeIDs: []string{"doc-1"},
+		Limit:        100,
+	})
+	if err != nil {
+		t.Fatalf("computeGraphSubset: %v", err)
+	}
+	slugs := nodeSlugs(got)
+	if len(slugs) != 2 || !slugs["a"] || !slugs["hub"] {
+		t.Errorf("doc-1 ego graph = %v, want a+hub", slugs)
+	}
+	if got.Meta.Total != 3 {
+		t.Errorf("scoped ego total = %d, want 3", got.Meta.Total)
+	}
+
+	_, err = computeGraphSubset(pages, &types.WikiGraphRequest{
+		Mode:         types.WikiGraphModeEgo,
+		Center:       "b",
+		Depth:        1,
+		KnowledgeIDs: []string{"doc-1"},
+		Limit:        100,
+	})
+	if err == nil || !strings.Contains(err.Error(), "outside the current source scope") {
+		t.Fatalf("expected out-of-scope center error, got %v", err)
+	}
+}
+
+func TestComputeGraphSubset_SourceScopedEgoHonorsCenterTypeFilter(t *testing.T) {
+	got, err := computeGraphSubset(makeSourceScopedGraphFixture(), &types.WikiGraphRequest{
+		Mode:         types.WikiGraphModeEgo,
+		Center:       "hub",
+		Depth:        1,
+		KnowledgeIDs: []string{"doc-1"},
+		Types:        []string{types.WikiPageTypeEntity},
+		Limit:        100,
+	})
+	if err != nil {
+		t.Fatalf("computeGraphSubset: %v", err)
+	}
+	if len(got.Nodes) != 0 || len(got.Edges) != 0 || got.Meta.Total != 1 {
+		t.Errorf("type-filtered scoped ego should be empty with one eligible candidate: %+v", got)
+	}
+}
+
+func TestComputeGraphSubset_SourceScopeWithoutMatchesReturnsEmptyGraph(t *testing.T) {
+	got, err := computeGraphSubset(makeSourceScopedGraphFixture(), &types.WikiGraphRequest{
+		Mode:         types.WikiGraphModeOverview,
+		KnowledgeIDs: []string{"doc-missing"},
+		Limit:        100,
+	})
+	if err != nil {
+		t.Fatalf("computeGraphSubset: %v", err)
+	}
+	if len(got.Nodes) != 0 || len(got.Edges) != 0 || got.Meta.Total != 0 || got.Meta.Truncated {
+		t.Errorf("unexpected empty scoped graph: %+v", got)
 	}
 }

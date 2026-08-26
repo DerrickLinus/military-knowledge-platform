@@ -595,9 +595,9 @@ func computeGraphSubset(pages []*types.WikiPage, req *types.WikiGraphRequest) (*
 		mode = types.WikiGraphModeOverview
 	}
 
-	// Pre-compute link_count and the type allow-list used for candidate
-	// filtering. We keep the full page list around so ego mode can still
-	// traverse through neighbors whose type is in the allow-list.
+	// Build the optional page-type and source-document allow-lists. Source
+	// scoping is OR-based: a page survives when any one of its SourceRefs
+	// points at any requested knowledge ID.
 	typeAllow := make(map[string]bool, len(req.Types))
 	for _, t := range req.Types {
 		if t != "" {
@@ -605,13 +605,75 @@ func computeGraphSubset(pages []*types.WikiPage, req *types.WikiGraphRequest) (*
 		}
 	}
 	hasTypeFilter := len(typeAllow) > 0
-
-	pageBySlug := make(map[string]*types.WikiPage, len(pages))
-	linkCount := make(map[string]int, len(pages))
-	for _, p := range pages {
-		pageBySlug[p.Slug] = p
-		linkCount[p.Slug] = len(p.InLinks) + len(p.OutLinks)
+	knowledgeAllow := make(map[string]bool, len(req.KnowledgeIDs))
+	for _, id := range req.KnowledgeIDs {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			knowledgeAllow[id] = true
+		}
 	}
+	hasSourceFilter := len(knowledgeAllow) > 0
+
+	allPageBySlug := make(map[string]*types.WikiPage, len(pages))
+	candidates := make([]*types.WikiPage, 0, len(pages))
+	pageBySlug := make(map[string]*types.WikiPage, len(pages))
+	for _, p := range pages {
+		if p == nil {
+			continue
+		}
+		allPageBySlug[p.Slug] = p
+		if hasSourceFilter && !wikiPageIntersectsKnowledgeIDs(p, knowledgeAllow) {
+			continue
+		}
+		if hasTypeFilter && !typeAllow[p.PageType] {
+			continue
+		}
+		candidates = append(candidates, p)
+		pageBySlug[p.Slug] = p
+	}
+
+	// Materialize the induced candidate graph once. In scoped mode the degree
+	// is recomputed from these local edges, so a page does not remain large or
+	// highly ranked merely because it links to pages outside the selected
+	// documents. Unscoped requests retain the historical stored in+out count
+	// for backwards compatibility.
+	linkCount := make(map[string]int, len(candidates))
+	if !hasSourceFilter {
+		for _, p := range candidates {
+			linkCount[p.Slug] = len(p.InLinks) + len(p.OutLinks)
+		}
+	}
+	allEdges := make([]types.WikiGraphEdge, 0)
+	adjacencySet := make(map[string]map[string]struct{}, len(candidates))
+	for _, p := range candidates {
+		for _, target := range p.OutLinks {
+			if _, ok := pageBySlug[target]; !ok {
+				continue
+			}
+			allEdges = append(allEdges, types.WikiGraphEdge{Source: p.Slug, Target: target})
+			if hasSourceFilter {
+				linkCount[p.Slug]++
+				linkCount[target]++
+			}
+			if adjacencySet[p.Slug] == nil {
+				adjacencySet[p.Slug] = make(map[string]struct{})
+			}
+			if adjacencySet[target] == nil {
+				adjacencySet[target] = make(map[string]struct{})
+			}
+			adjacencySet[p.Slug][target] = struct{}{}
+			adjacencySet[target][p.Slug] = struct{}{}
+		}
+	}
+	adjacency := make(map[string][]string, len(adjacencySet))
+	for slug, neighbors := range adjacencySet {
+		adjacency[slug] = make([]string, 0, len(neighbors))
+		for neighbor := range neighbors {
+			adjacency[slug] = append(adjacency[slug], neighbor)
+		}
+		sort.Strings(adjacency[slug])
+	}
+	eligibleTotal := len(candidates)
 
 	// Select the node slug set for the requested slice.
 	var selected map[string]struct{}
@@ -620,23 +682,32 @@ func computeGraphSubset(pages []*types.WikiPage, req *types.WikiGraphRequest) (*
 		if req.Center == "" {
 			return nil, errors.New("ego graph requires a center slug")
 		}
-		if _, ok := pageBySlug[req.Center]; !ok {
+		centerPage, ok := allPageBySlug[req.Center]
+		if !ok {
 			return nil, fmt.Errorf("ego center slug %q not found", req.Center)
+		}
+		if hasSourceFilter && !wikiPageIntersectsKnowledgeIDs(centerPage, knowledgeAllow) {
+			return nil, fmt.Errorf("ego center slug %q is outside the current source scope", req.Center)
+		}
+		if hasTypeFilter && !typeAllow[centerPage.PageType] {
+			// Preserve the existing type-filter behavior: a center hidden by the
+			// selected types produces an empty graph rather than an error.
+			selected = map[string]struct{}{}
+			break
 		}
 		depth := req.Depth
 		if depth < 1 {
 			depth = 1
 		}
-		selected = bfsEgoSlugs(pageBySlug, req.Center, depth, typeAllow, req.Limit)
-	default:
-		// overview: keep only type-allowed candidates, sort by link_count desc, cap.
-		candidates := make([]*types.WikiPage, 0, len(pages))
-		for _, p := range pages {
-			if hasTypeFilter && !typeAllow[p.PageType] {
-				continue
-			}
-			candidates = append(candidates, p)
+		if hasSourceFilter {
+			selected = bfsScopedEgoSlugs(adjacency, req.Center, depth, req.Limit)
+		} else {
+			// Keep the historical traversal and neighbor ordering for unscoped
+			// clients, including its defensive use of both InLinks and OutLinks.
+			selected = bfsEgoSlugs(allPageBySlug, req.Center, depth, typeAllow, req.Limit)
 		}
+	default:
+		// overview: sort the eligible candidate population by degree and cap.
 		sort.SliceStable(candidates, func(i, j int) bool {
 			li := linkCount[candidates[i].Slug]
 			lj := linkCount[candidates[j].Slug]
@@ -674,36 +745,26 @@ func computeGraphSubset(pages []*types.WikiPage, req *types.WikiGraphRequest) (*
 		return nodes[i].Slug < nodes[j].Slug
 	})
 
-	// Build edges, keeping only edges whose endpoints both survived selection.
+	// Keep only induced-graph edges whose endpoints both survived the final
+	// overview cap or ego traversal.
 	var edges []types.WikiGraphEdge
-	for _, p := range pages {
-		if _, ok := selected[p.Slug]; !ok {
+	for _, edge := range allEdges {
+		if _, ok := selected[edge.Source]; !ok {
 			continue
 		}
-		for _, target := range p.OutLinks {
-			if _, ok := selected[target]; !ok {
-				continue
-			}
-			edges = append(edges, types.WikiGraphEdge{
-				Source: p.Slug,
-				Target: target,
-			})
+		if _, ok := selected[edge.Target]; !ok {
+			continue
 		}
+		edges = append(edges, edge)
 	}
 
-	// total is the count of candidate nodes before truncation — i.e. the
-	// population the frontend would need to fetch if it asked for the
-	// whole graph. For overview this respects the type filter; for ego
-	// it is the total KB page count (the user still sees "X of Y" based
-	// on the full wiki, not a filtered denominator).
-	total := len(pages)
-	if mode == types.WikiGraphModeOverview && hasTypeFilter {
-		total = 0
-		for _, p := range pages {
-			if typeAllow[p.PageType] {
-				total++
-			}
-		}
+	// total is the eligible population before overview truncation / ego
+	// traversal. Scoped requests report the source+type-filtered denominator;
+	// unscoped ego retains the historical full-KB denominator.
+	total := eligibleTotal
+	if mode == types.WikiGraphModeEgo && !hasSourceFilter {
+		// Preserve the historical ego denominator for unscoped requests.
+		total = len(pages)
 	}
 
 	meta := types.WikiGraphMeta{
@@ -727,29 +788,31 @@ func computeGraphSubset(pages []*types.WikiPage, req *types.WikiGraphRequest) (*
 	}, nil
 }
 
-// bfsEgoSlugs computes the undirected BFS neighborhood of `center` up to
-// `depth` hops using both inbound and outbound links. Type-filtered pages
-// are excluded from the result but are also NOT traversed through — so a
-// filter that hides "index" pages will not leak the whole wiki via the
-// index. The caller guarantees center exists in pageBySlug.
-func bfsEgoSlugs(
-	pageBySlug map[string]*types.WikiPage,
+// wikiPageIntersectsKnowledgeIDs reports whether at least one source ref uses
+// an allowed knowledge ID. Both persisted formats are supported:
+// "knowledge-id" and "knowledge-id|document title".
+func wikiPageIntersectsKnowledgeIDs(page *types.WikiPage, allowed map[string]bool) bool {
+	if page == nil || len(allowed) == 0 {
+		return len(allowed) == 0
+	}
+	for _, ref := range page.SourceRefs {
+		knowledgeID := strings.TrimSpace(strings.SplitN(ref, "|", 2)[0])
+		if allowed[knowledgeID] {
+			return true
+		}
+	}
+	return false
+}
+
+// bfsScopedEgoSlugs computes an undirected BFS over the already-filtered induced
+// candidate graph. Building adjacency from surviving directed edges avoids
+// traversing stale InLinks or leaking through pages outside the source scope.
+func bfsScopedEgoSlugs(
+	adjacency map[string][]string,
 	center string,
 	depth int,
-	typeAllow map[string]bool,
 	limit int,
 ) map[string]struct{} {
-	hasTypeFilter := len(typeAllow) > 0
-	centerPage, ok := pageBySlug[center]
-	if !ok {
-		return map[string]struct{}{}
-	}
-	// If the center itself fails the type filter we honor the filter and
-	// return an empty set — the handler will surface Returned=0.
-	if hasTypeFilter && !typeAllow[centerPage.PageType] {
-		return map[string]struct{}{}
-	}
-
 	visited := map[string]struct{}{center: {}}
 	frontier := []string{center}
 
@@ -759,22 +822,8 @@ func bfsEgoSlugs(
 		}
 		next := make([]string, 0, len(frontier))
 		for _, slug := range frontier {
-			p, ok := pageBySlug[slug]
-			if !ok {
-				continue
-			}
-			neighbors := make([]string, 0, len(p.OutLinks)+len(p.InLinks))
-			neighbors = append(neighbors, p.OutLinks...)
-			neighbors = append(neighbors, p.InLinks...)
-			for _, nb := range neighbors {
+			for _, nb := range adjacency[slug] {
 				if _, seen := visited[nb]; seen {
-					continue
-				}
-				np, exists := pageBySlug[nb]
-				if !exists {
-					continue
-				}
-				if hasTypeFilter && !typeAllow[np.PageType] {
 					continue
 				}
 				visited[nb] = struct{}{}
@@ -793,6 +842,66 @@ func bfsEgoSlugs(
 		}
 	}
 
+	return visited
+}
+
+// bfsEgoSlugs preserves the original unscoped ego traversal semantics. It
+// reads both stored link directions and applies the page-type allow-list while
+// expanding the frontier.
+func bfsEgoSlugs(
+	pageBySlug map[string]*types.WikiPage,
+	center string,
+	depth int,
+	typeAllow map[string]bool,
+	limit int,
+) map[string]struct{} {
+	hasTypeFilter := len(typeAllow) > 0
+	centerPage, ok := pageBySlug[center]
+	if !ok {
+		return map[string]struct{}{}
+	}
+	if hasTypeFilter && !typeAllow[centerPage.PageType] {
+		return map[string]struct{}{}
+	}
+
+	visited := map[string]struct{}{center: {}}
+	frontier := []string{center}
+	for hop := 0; hop < depth; hop++ {
+		if limit > 0 && len(visited) >= limit {
+			break
+		}
+		next := make([]string, 0, len(frontier))
+		for _, slug := range frontier {
+			page, ok := pageBySlug[slug]
+			if !ok {
+				continue
+			}
+			neighbors := make([]string, 0, len(page.OutLinks)+len(page.InLinks))
+			neighbors = append(neighbors, page.OutLinks...)
+			neighbors = append(neighbors, page.InLinks...)
+			for _, neighbor := range neighbors {
+				if _, seen := visited[neighbor]; seen {
+					continue
+				}
+				neighborPage, exists := pageBySlug[neighbor]
+				if !exists || (hasTypeFilter && !typeAllow[neighborPage.PageType]) {
+					continue
+				}
+				visited[neighbor] = struct{}{}
+				next = append(next, neighbor)
+				if limit > 0 && len(visited) >= limit {
+					break
+				}
+			}
+			if limit > 0 && len(visited) >= limit {
+				break
+			}
+		}
+		frontier = next
+		if len(frontier) == 0 {
+			break
+		}
+	}
 	return visited
 }
 
@@ -995,6 +1104,18 @@ func (s *wikiPageService) CountByType(ctx context.Context, kbID string) (map[str
 // SearchPages performs full-text search over wiki pages
 func (s *wikiPageService) SearchPages(ctx context.Context, kbID string, query string, limit int) ([]*types.WikiPage, error) {
 	return s.repo.Search(ctx, kbID, query, limit)
+}
+
+// SearchPagesByKnowledgeIDs keeps graph navigation inside the same source
+// scope as overview/ego requests.
+func (s *wikiPageService) SearchPagesByKnowledgeIDs(
+	ctx context.Context,
+	kbID string,
+	query string,
+	knowledgeIDs []string,
+	limit int,
+) ([]*types.WikiPage, error) {
+	return s.repo.SearchByKnowledgeIDs(ctx, kbID, query, knowledgeIDs, limit)
 }
 
 // --- Internal helpers ---

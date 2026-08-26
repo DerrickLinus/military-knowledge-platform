@@ -10542,6 +10542,10 @@ paths:
         in: query
         name: types
         type: string
+      - description: Comma-separated source knowledge IDs (OR semantics)
+        in: query
+        name: knowledge_ids
+        type: string
       - description: Max nodes to return (default 500, max 2000)
         in: query
         name: limit
@@ -11041,6 +11045,10 @@ paths:
         in: query
         name: limit
         type: integer
+      - description: Comma-separated source knowledge IDs (OR semantics)
+        in: query
+        name: knowledge_ids
+        type: string
       produces:
       - application/json
       responses:
