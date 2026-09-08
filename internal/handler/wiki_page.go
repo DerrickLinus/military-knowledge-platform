@@ -25,6 +25,7 @@ type WikiPageHandler struct {
 	knowledgeService interfaces.KnowledgeService
 	lintService      *service.WikiLintService
 	auditService     interfaces.AuditLogService
+	memoryService    interfaces.MemoryService
 }
 
 // NewWikiPageHandler creates a new wiki page handler
@@ -34,6 +35,7 @@ func NewWikiPageHandler(
 	knowledgeService interfaces.KnowledgeService,
 	lintService *service.WikiLintService,
 	auditService interfaces.AuditLogService,
+	memoryService interfaces.MemoryService,
 ) *WikiPageHandler {
 	return &WikiPageHandler{
 		wikiService:      wikiService,
@@ -41,6 +43,7 @@ func NewWikiPageHandler(
 		knowledgeService: knowledgeService,
 		lintService:      lintService,
 		auditService:     auditService,
+		memoryService:    memoryService,
 	}
 }
 
@@ -944,6 +947,9 @@ func (h *WikiPageHandler) GetGraph(c *gin.Context) {
 		Types:           typesFilter,
 		KnowledgeIDs:    knowledgeIDs,
 		Limit:           limit,
+	}
+	if h.memoryService != nil {
+		req.FamiliarKnowledgeIDs = h.memoryService.FamiliarKnowledgeIDs(c.Request.Context())
 	}
 
 	graph, err := h.wikiService.GetGraph(c.Request.Context(), req)

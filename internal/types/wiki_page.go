@@ -63,6 +63,30 @@ func CleanWikiCategoryPath(parts []string) []string {
 	return cleaned
 }
 
+// TrimWikiFolderSegments keeps folder path segments verbatim, dropping only
+// blank entries. Folder names are validated on creation (no separators), and
+// the folder tree is the source of truth for a page's placement, so unlike
+// CleanWikiCategoryPath no page-type filtering, deduplication, or depth cap
+// applies: a user may legitimately name a folder "概念" or "Concepts".
+func TrimWikiFolderSegments(parts []string) []string {
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+// WikiFolderPathSegments splits a materialized folder path ("AI/RAG") into its
+// literal segments. An empty/blank path yields nil (the wiki root).
+func WikiFolderPathSegments(path string) []string {
+	if strings.TrimSpace(path) == "" {
+		return nil
+	}
+	return TrimWikiFolderSegments(strings.Split(path, "/"))
+}
+
 // SplitWikiPageTypes parses a page_type value that may carry several
 // comma-separated types (e.g. "entity,concept") into a deduplicated slice,
 // dropping blanks. An empty/whitespace-only input yields nil ("no filter").
@@ -655,6 +679,10 @@ type WikiGraphRequest struct {
 	Types           []string // optional page_type filter; empty = no filter
 	KnowledgeIDs    []string // optional source document scope; empty = all wiki pages
 	Limit           int      // max nodes to return; <= 0 means uncapped
+	// FamiliarKnowledgeIDs are documents this person keeps drawing answers
+	// from. Pages whose source_refs intersect the set are marked Familiar so
+	// the existing Wiki graph can light them up without cloning a second graph.
+	FamiliarKnowledgeIDs []string
 }
 
 // WikiGraphData represents the link graph structure for visualization.
@@ -674,6 +702,8 @@ type WikiGraphMeta struct {
 	Truncated bool   `json:"truncated"`        // true when Returned < Total (after filters)
 	Center    string `json:"center,omitempty"` // populated in ego mode
 	Depth     int    `json:"depth,omitempty"`  // populated in ego mode
+	// FamiliarCount is how many returned nodes are lit up for this person.
+	FamiliarCount int `json:"familiar_count,omitempty"`
 }
 
 // WikiGraphNode represents a node in the wiki link graph
@@ -683,6 +713,10 @@ type WikiGraphNode struct {
 	PageType string `json:"page_type"`
 	// Number of inbound + outbound links
 	LinkCount int `json:"link_count"`
+	// Familiar is true when this page was built from a document this person
+	// keeps citing in answers. It is a personal overlay, not a property of
+	// the page: two people looking at the same wiki see different highlights.
+	Familiar bool `json:"familiar,omitempty"`
 }
 
 // WikiGraphEdge represents a directed edge in the wiki link graph
@@ -785,4 +819,44 @@ type WikiPageLite struct {
 	Status   string      `json:"status"`
 	Aliases  StringArray `json:"aliases,omitempty"`
 	OutLinks StringArray `json:"out_links,omitempty"`
+}
+
+// WikiSourceKnowledgeID extracts the knowledge id from a source_refs entry,
+// stored as "uuid" or "uuid|title".
+func WikiSourceKnowledgeID(ref string) string {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return ""
+	}
+	if i := strings.IndexByte(ref, '|'); i > 0 {
+		return strings.TrimSpace(ref[:i])
+	}
+	return ref
+}
+
+// SourceKnowledgeIDs returns the document ids this page was built from.
+func (p *WikiPage) SourceKnowledgeIDs() []string {
+	if p == nil || len(p.SourceRefs) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(p.SourceRefs))
+	for _, ref := range p.SourceRefs {
+		if id := WikiSourceKnowledgeID(ref); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// BuiltFrom reports whether any of this page's sources is in the given set.
+func (p *WikiPage) BuiltFrom(knowledgeIDs map[string]struct{}) bool {
+	if p == nil || len(knowledgeIDs) == 0 {
+		return false
+	}
+	for _, id := range p.SourceKnowledgeIDs() {
+		if _, ok := knowledgeIDs[id]; ok {
+			return true
+		}
+	}
+	return false
 }

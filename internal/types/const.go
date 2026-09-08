@@ -4,8 +4,16 @@ package types
 type ContextKey string
 
 const (
-	// TenantIDContextKey is the context key for tenant ID
+	// TenantIDContextKey scopes execution (repository/model queries).
 	TenantIDContextKey ContextKey = "TenantID"
+	// CallerContextKey captures the authenticated resource caller.
+	CallerContextKey ContextKey = "ResourceCaller"
+	// KBGrantsContextKey carries immutable operation grants.
+	KBGrantsContextKey ContextKey = "ResourceKBGrants"
+	// KBTransferContextKey carries one admitted resource pair.
+	KBTransferContextKey ContextKey = "ResourceKBTransfer"
+	// SharedAgentGrantContextKey carries an authorized agent read scope.
+	SharedAgentGrantContextKey ContextKey = "ResourceSharedAgentGrant"
 	// TenantInfoContextKey is the context key for tenant information
 	TenantInfoContextKey ContextKey = "TenantInfo"
 	// RequestIDContextKey is the context key for request ID
@@ -54,6 +62,13 @@ const (
 	LanguageContextKey ContextKey = "Language"
 	// EmbedVisitorContextKey is the anonymous visitor id for embed OAuth isolation.
 	EmbedVisitorContextKey ContextKey = "EmbedVisitorID"
+	// EmbedChannelContextKey stores the authenticated embed channel (an
+	// *EmbedChannel) on the request context. Declared here rather than in the
+	// middleware that authenticates it, for the same reason as
+	// LangfuseTraceContextKey: the clone table in context_clone.go has to name
+	// every context key, and middleware imports this package, so a key
+	// declared there could only be referred to by its raw string value.
+	EmbedChannelContextKey ContextKey = "EmbedChannel"
 	// LangfuseTraceContextKey carries the active Langfuse *Trace across the
 	// request lifecycle. Defined here (not inside the langfuse package) so
 	// that logger.CloneContext can preserve it without importing langfuse.
