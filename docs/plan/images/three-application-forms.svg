@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="560" viewBox="0 0 1280 560" role="img" aria-labelledby="title desc">
+  <title id="title">万象·知枢平台的三种应用形式</title>
+  <desc id="desc">员工平台、本体平台和业务 Agent 三类调用方共同访问万象·知枢知识库平台。</desc>
+
+  <defs>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#0f172a" flood-opacity="0.10"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/>
+    </marker>
+    <style>
+      .text { font-family: "Noto Sans CJK SC", "Microsoft YaHei", "PingFang SC", sans-serif; }
+      .card-title { font-size: 24px; font-weight: 700; fill: #0f172a; }
+      .card-copy { font-size: 20px; font-weight: 400; fill: #475569; }
+      .platform-title { font-size: 28px; font-weight: 700; fill: #ffffff; }
+      .platform-copy { font-size: 21px; font-weight: 400; fill: #dbeafe; }
+      .note { font-size: 18px; font-weight: 500; fill: #64748b; }
+    </style>
+  </defs>
+
+  <rect width="1280" height="560" rx="20" fill="#f8fafc"/>
+
+  <!-- 三类应用 -->
+  <g filter="url(#shadow)">
+    <rect x="50" y="50" width="350" height="150" rx="16" fill="#ffffff" stroke="#93c5fd" stroke-width="2"/>
+    <rect x="465" y="50" width="350" height="150" rx="16" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+    <rect x="880" y="50" width="350" height="150" rx="16" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+  </g>
+
+  <g class="text" text-anchor="middle">
+    <text x="225" y="105" class="card-title">应用一：员工平台</text>
+    <text x="225" y="150" class="card-copy">Web UI 直接使用</text>
+
+    <text x="640" y="105" class="card-title">应用二：本体平台</text>
+    <text x="640" y="150" class="card-copy">智能构建的知识源</text>
+
+    <text x="1055" y="105" class="card-title">应用三：业务 Agent</text>
+    <text x="1055" y="150" class="card-copy">同左</text>
+  </g>
+
+  <!-- 调用关系 -->
+  <g fill="none" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)">
+    <path d="M225 200 V330"/>
+    <path d="M640 200 V330"/>
+    <path d="M1055 200 V330"/>
+  </g>
+
+  <g class="text" text-anchor="middle">
+    <rect x="669" y="236" width="357" height="42" rx="21" fill="#f1f5f9" stroke="#cbd5e1"/>
+    <text x="847.5" y="264" class="note">预留接口</text>
+  </g>
+
+  <!-- 本项目交付物 -->
+  <g filter="url(#shadow)">
+    <rect x="90" y="340" width="1100" height="160" rx="18" fill="#1d4ed8"/>
+  </g>
+  <g class="text" text-anchor="middle">
+    <text x="640" y="405" class="platform-title">万象·知枢 知识库平台（核心开发）</text>
+    <text x="640" y="457" class="platform-copy">知识构建｜知识治理｜智能应用｜权限管理｜开放扩展</text>
+  </g>
+</svg>

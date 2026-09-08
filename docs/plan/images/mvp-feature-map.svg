@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="620" viewBox="0 0 1280 620" role="img" aria-labelledby="title desc">
+  <title id="title">一期 MVP 总体功能地图</title>
+  <desc id="desc">一期 MVP 包括知识入库和知识使用两类功能。知识入库包括文档上传、扫描件上传和三层权限；知识使用包括智能问答、文档研读、自动综述和思维导图。</desc>
+
+  <defs>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="5" stdDeviation="8" flood-color="#0f172a" flood-opacity="0.10"/>
+    </filter>
+    <linearGradient id="ingestHeader" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#2563eb"/>
+      <stop offset="1" stop-color="#3b82f6"/>
+    </linearGradient>
+    <linearGradient id="useHeader" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#4f46e5"/>
+      <stop offset="1" stop-color="#6366f1"/>
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#94a3b8"/>
+    </marker>
+    <style>
+      .text { font-family: "Noto Sans CJK SC", "Microsoft YaHei", "PingFang SC", sans-serif; }
+      .map-title { font-size: 28px; font-weight: 700; fill: #1e3a8a; }
+      .section-title { font-size: 28px; font-weight: 700; fill: #ffffff; }
+      .item-title { font-size: 23px; font-weight: 600; fill: #0f172a; }
+      .item-note { font-size: 20px; font-weight: 400; fill: #475569; }
+      .number { font-size: 18px; font-weight: 700; fill: #ffffff; }
+    </style>
+  </defs>
+
+  <rect width="1280" height="620" rx="22" fill="#f8fafc"/>
+
+  <!-- 阶段标题 -->
+  <g class="text" text-anchor="middle">
+    <rect x="510" y="38" width="260" height="58" rx="29" fill="#dbeafe" stroke="#93c5fd" stroke-width="2"/>
+    <text x="640" y="76" class="map-title">一期 MVP</text>
+  </g>
+
+  <!-- 知识入库 -->
+  <g filter="url(#shadow)">
+    <rect x="55" y="130" width="485" height="420" rx="18" fill="#ffffff" stroke="#bfdbfe" stroke-width="2"/>
+    <path d="M73 130 H522 A18 18 0 0 1 540 148 V218 H55 V148 A18 18 0 0 1 73 130 Z" fill="url(#ingestHeader)"/>
+  </g>
+  <g class="text">
+    <text x="297.5" y="186" text-anchor="middle" class="section-title">知识入库</text>
+
+    <circle cx="105" cy="280" r="22" fill="#3b82f6"/>
+    <text x="105" y="287" text-anchor="middle" class="number">1</text>
+    <text x="148" y="289" class="item-title">文档上传</text>
+    <text x="287" y="289" class="item-note">（文本型）</text>
+
+    <line x1="92" y1="334" x2="503" y2="334" stroke="#e2e8f0" stroke-width="2"/>
+
+    <circle cx="105" cy="385" r="22" fill="#3b82f6"/>
+    <text x="105" y="392" text-anchor="middle" class="number">2</text>
+    <text x="148" y="394" class="item-title">扫描件上传</text>
+    <text x="310" y="394" class="item-note">（OCR）</text>
+
+    <line x1="92" y1="439" x2="503" y2="439" stroke="#e2e8f0" stroke-width="2"/>
+
+    <circle cx="105" cy="490" r="22" fill="#3b82f6"/>
+    <text x="105" y="497" text-anchor="middle" class="number">3</text>
+    <text x="148" y="499" class="item-title">权限三层</text>
+    <text x="263" y="499" class="item-note">（公开 / 部门 / 个人）</text>
+  </g>
+
+  <!-- 入库到使用 -->
+  <path d="M558 340 H624" fill="none" stroke="#94a3b8" stroke-width="4" stroke-linecap="round" marker-end="url(#arrow)"/>
+
+  <!-- 知识使用 -->
+  <g filter="url(#shadow)">
+    <rect x="640" y="130" width="585" height="420" rx="18" fill="#ffffff" stroke="#c7d2fe" stroke-width="2"/>
+    <path d="M658 130 H1207 A18 18 0 0 1 1225 148 V218 H640 V148 A18 18 0 0 1 658 130 Z" fill="url(#useHeader)"/>
+  </g>
+  <g class="text">
+    <text x="932.5" y="186" text-anchor="middle" class="section-title">知识使用</text>
+
+    <circle cx="692" cy="267" r="21" fill="#6366f1"/>
+    <text x="692" y="274" text-anchor="middle" class="number">1</text>
+    <text x="735" y="276" class="item-title">智能问答</text>
+    <text x="850" y="276" class="item-note">（含教学模式）</text>
+
+    <line x1="679" y1="309" x2="1187" y2="309" stroke="#e2e8f0" stroke-width="2"/>
+
+    <circle cx="692" cy="352" r="21" fill="#6366f1"/>
+    <text x="692" y="359" text-anchor="middle" class="number">2</text>
+    <text x="735" y="361" class="item-title">文档研读</text>
+    <text x="850" y="361" class="item-note">（对照式 + 章节导航）</text>
+
+    <line x1="679" y1="394" x2="1187" y2="394" stroke="#e2e8f0" stroke-width="2"/>
+
+    <circle cx="692" cy="437" r="21" fill="#6366f1"/>
+    <text x="692" y="444" text-anchor="middle" class="number">3</text>
+    <text x="735" y="446" class="item-title">自动综述</text>
+    <text x="850" y="446" class="item-note">（沉淀回库）</text>
+
+    <line x1="679" y1="479" x2="1187" y2="479" stroke="#e2e8f0" stroke-width="2"/>
+
+    <circle cx="692" cy="522" r="21" fill="#6366f1"/>
+    <text x="692" y="529" text-anchor="middle" class="number">4</text>
+    <text x="735" y="531" class="item-title">思维导图</text>
+    <text x="850" y="531" class="item-note">（查看 + 大纲导出）</text>
+  </g>
+</svg>
