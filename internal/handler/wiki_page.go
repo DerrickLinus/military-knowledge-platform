@@ -20,24 +20,27 @@ import (
 
 // WikiPageHandler handles HTTP requests for wiki page operations
 type WikiPageHandler struct {
-	wikiService  interfaces.WikiPageService
-	kbService    interfaces.KnowledgeBaseService
-	lintService  *service.WikiLintService
-	auditService interfaces.AuditLogService
+	wikiService      interfaces.WikiPageService
+	kbService        interfaces.KnowledgeBaseService
+	knowledgeService interfaces.KnowledgeService
+	lintService      *service.WikiLintService
+	auditService     interfaces.AuditLogService
 }
 
 // NewWikiPageHandler creates a new wiki page handler
 func NewWikiPageHandler(
 	wikiService interfaces.WikiPageService,
 	kbService interfaces.KnowledgeBaseService,
+	knowledgeService interfaces.KnowledgeService,
 	lintService *service.WikiLintService,
 	auditService interfaces.AuditLogService,
 ) *WikiPageHandler {
 	return &WikiPageHandler{
-		wikiService:  wikiService,
-		kbService:    kbService,
-		lintService:  lintService,
-		auditService: auditService,
+		wikiService:      wikiService,
+		kbService:        kbService,
+		knowledgeService: knowledgeService,
+		lintService:      lintService,
+		auditService:     auditService,
 	}
 }
 
@@ -776,7 +779,71 @@ const (
 	wikiGraphMaxLimit     = 2000
 	wikiGraphMaxDepth     = 3
 	wikiGraphDefaultDepth = 1
+	wikiGraphMaxKnowledge = 100
 )
+
+// parseWikiGraphKnowledgeIDs parses the optional comma-separated source
+// scope. Parameter absence means "whole knowledge base"; an explicitly
+// present but empty value is rejected so a malformed scoped request cannot
+// accidentally widen itself to the whole graph.
+func parseWikiGraphKnowledgeIDs(c *gin.Context) ([]string, bool, error) {
+	raw, present := c.GetQuery("knowledge_ids")
+	if !present {
+		return nil, false, nil
+	}
+
+	seen := make(map[string]struct{})
+	ids := make([]string, 0)
+	for _, part := range strings.Split(raw, ",") {
+		id := strings.TrimSpace(part)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+		if len(ids) > wikiGraphMaxKnowledge {
+			return nil, true, fmt.Errorf("knowledge_ids supports at most %d IDs", wikiGraphMaxKnowledge)
+		}
+	}
+	if len(ids) == 0 {
+		return nil, true, fmt.Errorf("knowledge_ids cannot be empty")
+	}
+	return ids, true, nil
+}
+
+// validateWikiGraphKnowledgeIDs rejects missing, inaccessible and cross-KB
+// documents as one generic validation error. Besides keeping the source scope
+// well-defined, the generic response avoids disclosing whether an arbitrary
+// knowledge ID exists in another tenant or knowledge base.
+func (h *WikiPageHandler) validateWikiGraphKnowledgeIDs(
+	ctx context.Context,
+	kbID string,
+	tenantID uint64,
+	ids []string,
+) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	knowledges, err := h.knowledgeService.GetKnowledgeBatchWithSharedAccess(ctx, tenantID, ids)
+	if err != nil {
+		return err
+	}
+	valid := make(map[string]struct{}, len(knowledges))
+	for _, knowledge := range knowledges {
+		if knowledge != nil && knowledge.KnowledgeBaseID == kbID {
+			valid[knowledge.ID] = struct{}{}
+		}
+	}
+	for _, id := range ids {
+		if _, ok := valid[id]; !ok {
+			return errors.NewBadRequestError("knowledge_ids must belong to the current knowledge base")
+		}
+	}
+	return nil
+}
 
 // GetGraph godoc
 // @Summary      Get wiki link graph
@@ -791,12 +858,13 @@ const (
 // @Param        center  query string  false  "Center slug for ego mode"
 // @Param        depth   query int     false  "Ego BFS depth (1-3, default 1)"
 // @Param        types   query string  false  "Comma-separated page_type allow-list"
+// @Param        knowledge_ids query string false "Comma-separated source knowledge IDs (OR semantics)"
 // @Param        limit   query int     false  "Max nodes to return (default 500, max 2000)"
 // @Success      200  {object}  types.WikiGraphData
 // @Security     Bearer
 // @Router       /knowledgebase/{kb_id}/wiki/graph [get]
 func (h *WikiPageHandler) GetGraph(c *gin.Context) {
-	kbID, _, err := h.validateWikiKB(c)
+	kbID, tenantID, err := h.validateWikiKB(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -853,12 +921,28 @@ func (h *WikiPageHandler) GetGraph(c *gin.Context) {
 		}
 	}
 
+	knowledgeIDs, _, err := parseWikiGraphKnowledgeIDs(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := h.validateWikiGraphKnowledgeIDs(c.Request.Context(), kbID, tenantID, knowledgeIDs); err != nil {
+		var appErr *errors.AppError
+		if stderrors.As(err, &appErr) {
+			c.JSON(appErr.HTTPCode, gin.H{"error": appErr.Message})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
 	req := &types.WikiGraphRequest{
 		KnowledgeBaseID: kbID,
 		Mode:            mode,
 		Center:          center,
 		Depth:           depth,
 		Types:           typesFilter,
+		KnowledgeIDs:    knowledgeIDs,
 		Limit:           limit,
 	}
 
@@ -982,11 +1066,12 @@ func (h *WikiPageHandler) UpdateIssueStatus(c *gin.Context) {
 // @Param        kb_id  path   string  true   "Knowledge base ID"
 // @Param        q      query  string  true   "Search query"
 // @Param        limit  query  int     false  "Max results (default 10)"
+// @Param        knowledge_ids query string false "Comma-separated source knowledge IDs (OR semantics)"
 // @Success      200  {array}  types.WikiPage
 // @Security     Bearer
 // @Router       /knowledgebase/{kb_id}/wiki/search [get]
 func (h *WikiPageHandler) SearchPages(c *gin.Context) {
-	kbID, _, err := h.validateWikiKB(c)
+	kbID, tenantID, err := h.validateWikiKB(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -999,8 +1084,27 @@ func (h *WikiPageHandler) SearchPages(c *gin.Context) {
 	}
 
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
+	knowledgeIDs, _, err := parseWikiGraphKnowledgeIDs(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := h.validateWikiGraphKnowledgeIDs(c.Request.Context(), kbID, tenantID, knowledgeIDs); err != nil {
+		var appErr *errors.AppError
+		if stderrors.As(err, &appErr) {
+			c.JSON(appErr.HTTPCode, gin.H{"error": appErr.Message})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
 
-	pages, err := h.wikiService.SearchPages(c.Request.Context(), kbID, query, limit)
+	var pages []*types.WikiPage
+	if len(knowledgeIDs) > 0 {
+		pages, err = h.wikiService.SearchPagesByKnowledgeIDs(c.Request.Context(), kbID, query, knowledgeIDs, limit)
+	} else {
+		pages, err = h.wikiService.SearchPages(c.Request.Context(), kbID, query, limit)
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

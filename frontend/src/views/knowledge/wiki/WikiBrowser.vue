@@ -6,8 +6,20 @@
         <div ref="graphRef" class="wiki-graph-canvas"></div>
 
         <!-- Graph Search Overlay -->
-        <div v-if="graphReady" class="wiki-graph-search-container">
-          <div class="wiki-graph-search-row">
+        <div v-if="graphReady || !graphLoading" class="wiki-graph-search-container">
+          <div class="wiki-graph-source-filter"
+            :title="$t('knowledgeEditor.wikiBrowser.graphSourceFilterTip')">
+            <t-select v-model="graphKnowledgeIDs" multiple filterable clearable
+              :options="graphKnowledgeOptions" :loading="graphKnowledgeLoading"
+              :on-search="handleGraphKnowledgeSearch"
+              :placeholder="$t('knowledgeEditor.wikiBrowser.graphSourceFilterPlaceholder')"
+              :popup-props="{ zIndex: 100 }"
+              class="graph-source-select" @focus="ensureGraphKnowledgeOptions"
+              @change="handleGraphKnowledgeScopeChange">
+              <template #prefixIcon><t-icon name="file" /></template>
+            </t-select>
+          </div>
+          <div v-if="graphReady" class="wiki-graph-search-row">
             <div class="wiki-graph-search">
               <t-select v-model="graphSearchValue" filterable :options="graphSearchEffectiveOptions"
                 :loading="graphSearchLoading" :on-search="handleGraphRemoteSearch"
@@ -35,7 +47,7 @@
               </template>
             </t-popup>
           </div>
-          <div v-if="stats && stats.pending_issues > 0" class="wiki-global-issues-status graph-issues-badge"
+          <div v-if="graphReady && stats && stats.pending_issues > 0" class="wiki-global-issues-status graph-issues-badge"
             @click="showGlobalIssuesDrawer = true">
             <t-icon name="error-circle" style="color: var(--td-warning-color);" />
             <span class="queue-text">{{ $t('knowledgeEditor.wikiBrowser.globalIssuesCount', {
@@ -119,7 +131,7 @@
             <t-icon name="chart-bubble" size="48px" />
           </div>
           <p class="wiki-empty-desc">{{ graphLoading ? $t('knowledgeEditor.wikiBrowser.graphEmpty') :
-            $t('knowledgeEditor.wikiBrowser.graphNoData') }}</p>
+            graphEmptyMessage }}</p>
         </div>
 
         <!-- Graph page detail drawer -->
@@ -804,7 +816,7 @@ import {
   expandedWikiDirectoryPaths,
   expandWikiDirectoryPath,
 } from './wikiDirectoryState'
-import { getKnowledgeDetails } from '@/api/knowledge-base'
+import { getKnowledgeDetails, listKnowledgeFiles } from '@/api/knowledge-base'
 import { createSessions } from '@/api/chat'
 import ChatView from '@/views/chat/index.vue'
 import {
@@ -832,6 +844,11 @@ import {
   type WikiIndexGroup,
   type WikiIndexEntryDTO,
 } from '@/api/wiki'
+import {
+  normalizeWikiGraphKnowledgeIDs,
+  WIKI_GRAPH_MAX_KNOWLEDGE_IDS,
+  withWikiGraphScope,
+} from './wikiGraphScope'
 
 const router = useRouter()
 const route = useRoute()
@@ -982,6 +999,9 @@ const stats = ref<WikiStats | null>(null)
 const graphData = ref<WikiGraphData | null>(null)
 const searchQuery = ref('')
 const graphSearchValue = ref('')
+const graphKnowledgeIDs = ref<string[]>([])
+const graphKnowledgeOptions = ref<Array<{ label: string; value: string }>>([])
+const graphKnowledgeLoading = ref(false)
 const graphRef = ref<HTMLElement | null>(null)
 const readerBodyRef = ref<HTMLElement | null>(null)
 const drawerBodyRef = ref<HTMLElement | null>(null)
@@ -1003,6 +1023,95 @@ const graphCenter = ref<string>('')
 const GRAPH_OVERVIEW_LIMIT = 500
 const GRAPH_EGO_LIMIT = 500
 const GRAPH_EGO_DEFAULT_DEPTH = 1
+
+const graphEmptyMessage = computed(() => graphKnowledgeIDs.value.length > 0
+  ? t('knowledgeEditor.wikiBrowser.graphScopedNoData')
+  : t('knowledgeEditor.wikiBrowser.graphNoData'))
+
+function graphKnowledgeScope(): string[] | undefined {
+  return graphKnowledgeIDs.value.length > 0 ? [...graphKnowledgeIDs.value] : undefined
+}
+
+function graphKnowledgeScopeKey(): string {
+  return `${props.knowledgeBaseId}\u0000${graphKnowledgeIDs.value.join('\u0000')}`
+}
+
+function wikiKnowledgeOption(item: any): { label: string; value: string } | null {
+  const value = String(item?.id || '').trim()
+  if (!value) return null
+  const label = item?.display_name || item?.file_name || item?.original_file_name || item?.title || value
+  return { label: String(label), value }
+}
+
+let graphKnowledgeSearchTimer: ReturnType<typeof setTimeout> | null = null
+let graphKnowledgeSearchSeq = 0
+
+async function loadGraphKnowledgeOptions(keyword = '') {
+  if (!props.knowledgeBaseId) return
+  const seq = ++graphKnowledgeSearchSeq
+  graphKnowledgeLoading.value = true
+  try {
+    const res = await listKnowledgeFiles(props.knowledgeBaseId, {
+      page: 1,
+      page_size: WIKI_GRAPH_MAX_KNOWLEDGE_IDS,
+      keyword: keyword.trim() || undefined,
+    })
+    if (seq !== graphKnowledgeSearchSeq) return
+    const items: any[] = (res as any)?.data || []
+    const next = new Map<string, { label: string; value: string }>()
+    // Keep selected options visible when a remote search page no longer
+    // contains them.
+    for (const option of graphKnowledgeOptions.value) {
+      if (graphKnowledgeIDs.value.includes(option.value)) next.set(option.value, option)
+    }
+    for (const item of items) {
+      const option = wikiKnowledgeOption(item)
+      if (option) next.set(option.value, option)
+    }
+    graphKnowledgeOptions.value = Array.from(next.values())
+  } catch (e) {
+    if (seq === graphKnowledgeSearchSeq) {
+      console.error('Failed to load graph source documents:', e)
+    }
+  } finally {
+    if (seq === graphKnowledgeSearchSeq) graphKnowledgeLoading.value = false
+  }
+}
+
+function ensureGraphKnowledgeOptions() {
+  if (graphKnowledgeOptions.value.length === 0 && !graphKnowledgeLoading.value) {
+    void loadGraphKnowledgeOptions()
+  }
+}
+
+function handleGraphKnowledgeSearch(keyword: string) {
+  if (graphKnowledgeSearchTimer) clearTimeout(graphKnowledgeSearchTimer)
+  graphKnowledgeSearchTimer = setTimeout(() => {
+    void loadGraphKnowledgeOptions(keyword || '')
+  }, 200)
+}
+
+async function handleGraphKnowledgeScopeChange(value: unknown) {
+  const raw = Array.isArray(value) ? value.map(String) : []
+  const normalized = normalizeWikiGraphKnowledgeIDs(raw)
+  if (normalized.length > WIKI_GRAPH_MAX_KNOWLEDGE_IDS) {
+    graphKnowledgeIDs.value = normalized.slice(0, WIKI_GRAPH_MAX_KNOWLEDGE_IDS)
+    MessagePlugin.warning(t('knowledgeEditor.wikiBrowser.graphSourceFilterLimit', {
+      count: WIKI_GRAPH_MAX_KNOWLEDGE_IDS,
+    }))
+  } else {
+    graphKnowledgeIDs.value = normalized
+  }
+  graphSelectedSlug.value = null
+  graphHighlightSlug.value = null
+  graphDrawerVisible.value = false
+  graphSearchValue.value = ''
+  graphSearchSeq += 1
+  graphSearchOptions.value = []
+  graphSearchDefaultOptions.value = []
+  resetBloomGenerations(undefined)
+  if (props.view === 'graph') await loadGraph()
+}
 
 watch(showGlobalIssuesDrawer, async (val) => {
   if (val) {
@@ -1476,6 +1585,11 @@ const graphStatusCard = computed((): { icon: string; title: string; primary: str
     const relatedCount = Math.max(0, meta.returned - 1)
     const secondaryParts: string[] = []
     if (typeLabel) secondaryParts.push(typeLabel)
+    if (graphKnowledgeIDs.value.length > 0) {
+      secondaryParts.push(t('knowledgeEditor.wikiBrowser.graphScopedSources', {
+        count: graphKnowledgeIDs.value.length,
+      }))
+    }
     secondaryParts.push(t('knowledgeEditor.wikiBrowser.cardRelatedNodes', { count: relatedCount }))
     return {
       icon: 'focus',
@@ -1485,12 +1599,17 @@ const graphStatusCard = computed((): { icon: string; title: string; primary: str
     }
   }
   if (meta.mode === 'overview') {
-    const secondary = meta.truncated
+    const overviewHint = meta.truncated
       ? t('knowledgeEditor.wikiBrowser.cardOverviewHintTruncated')
       : t('knowledgeEditor.wikiBrowser.cardOverviewHintFull')
+    const secondary = graphKnowledgeIDs.value.length > 0
+      ? `${t('knowledgeEditor.wikiBrowser.graphScopedSources', { count: graphKnowledgeIDs.value.length })} · ${overviewHint}`
+      : overviewHint
     return {
       icon: 'chart-bubble',
-      title: t('knowledgeEditor.wikiBrowser.cardOverviewTitle'),
+      title: graphKnowledgeIDs.value.length > 0
+        ? t('knowledgeEditor.wikiBrowser.cardScopedOverviewTitle')
+        : t('knowledgeEditor.wikiBrowser.cardOverviewTitle'),
       primary: t('knowledgeEditor.wikiBrowser.cardOverviewPrimary', {
         returned: meta.returned,
         total: meta.total,
@@ -3146,6 +3265,7 @@ function graphFilterSelectsNothing(): boolean {
 }
 
 async function loadGraph() {
+  const sourceScopeKey = graphKnowledgeScopeKey()
   graphLoading.value = true
   graphReady.value = false
   graphMode.value = 'overview'
@@ -3160,11 +3280,12 @@ async function loadGraph() {
     return
   }
   try {
-    const res = await getWikiGraph(props.knowledgeBaseId, {
+    const res = await getWikiGraph(props.knowledgeBaseId, withWikiGraphScope({
       mode: 'overview',
       limit: GRAPH_OVERVIEW_LIMIT,
       types: graphFilterTypesToArray(),
-    })
+    }, graphKnowledgeIDs.value))
+    if (sourceScopeKey !== graphKnowledgeScopeKey()) return
     graphData.value = (res as any).data || res as any
     // Seed the search dropdown's empty-state with this overview snapshot
     // so opening the select without typing shows the top-500 by link_count
@@ -3187,7 +3308,7 @@ async function loadGraph() {
   } catch (e) {
     console.error('Failed to load graph:', e)
   } finally {
-    graphLoading.value = false
+    if (sourceScopeKey === graphKnowledgeScopeKey()) graphLoading.value = false
   }
 }
 
@@ -3198,6 +3319,7 @@ async function loadGraph() {
 // loadGraph() again.
 async function loadEgoGraph(slug: string, depth = GRAPH_EGO_DEFAULT_DEPTH) {
   if (!slug) return
+  const sourceScopeKey = graphKnowledgeScopeKey()
   graphLoading.value = true
   graphReady.value = false
   if (graphFilterSelectsNothing()) {
@@ -3211,13 +3333,14 @@ async function loadEgoGraph(slug: string, depth = GRAPH_EGO_DEFAULT_DEPTH) {
     return
   }
   try {
-    const res = await getWikiGraph(props.knowledgeBaseId, {
+    const res = await getWikiGraph(props.knowledgeBaseId, withWikiGraphScope({
       mode: 'ego',
       center: slug,
       depth,
       limit: GRAPH_EGO_LIMIT,
       types: graphFilterTypesToArray(),
-    })
+    }, graphKnowledgeIDs.value))
+    if (sourceScopeKey !== graphKnowledgeScopeKey()) return
     graphData.value = (res as any).data || res as any
     graphMode.value = 'ego'
     graphCenter.value = slug
@@ -3232,8 +3355,12 @@ async function loadEgoGraph(slug: string, depth = GRAPH_EGO_DEFAULT_DEPTH) {
     graphSelectedSlug.value = slug
   } catch (e) {
     console.error(`Failed to load ego graph for ${slug}:`, e)
+    // Keep the previous canvas usable when the requested center is outside a
+    // source scope (or the request fails transiently).
+    await nextTick()
+    renderGraph()
   } finally {
-    graphLoading.value = false
+    if (sourceScopeKey === graphKnowledgeScopeKey()) graphLoading.value = false
   }
 }
 
@@ -3278,15 +3405,17 @@ async function loadBloomNeighbors(anchorSlug: string, depth = GRAPH_EGO_DEFAULT_
     await loadEgoGraph(anchorSlug, depth)
     return
   }
+  const sourceScopeKey = graphKnowledgeScopeKey()
   graphLoading.value = true
   try {
-    const res = await getWikiGraph(props.knowledgeBaseId, {
+    const res = await getWikiGraph(props.knowledgeBaseId, withWikiGraphScope({
       mode: 'ego',
       center: anchorSlug,
       depth,
       limit: GRAPH_EGO_LIMIT,
       types: graphFilterTypesToArray(),
-    })
+    }, graphKnowledgeIDs.value))
+    if (sourceScopeKey !== graphKnowledgeScopeKey()) return
     const incoming = (res as any).data || res as any
     if (!incoming || !Array.isArray(incoming.nodes)) return
 
@@ -3309,7 +3438,7 @@ async function loadBloomNeighbors(anchorSlug: string, depth = GRAPH_EGO_DEFAULT_
   } catch (e) {
     console.error(`Failed to bloom neighbors for ${anchorSlug}:`, e)
   } finally {
-    graphLoading.value = false
+    if (sourceScopeKey === graphKnowledgeScopeKey()) graphLoading.value = false
   }
 }
 
@@ -3452,6 +3581,7 @@ async function growFrontier() {
   }
   if (frontier.length === 0) return
 
+  const sourceScopeKey = graphKnowledgeScopeKey()
   graphLoading.value = true
   try {
     // Concurrency-limited fan-out. We collect responses in order of
@@ -3465,13 +3595,13 @@ async function growFrontier() {
         const idx = cursor++
         const slug = frontier[idx]
         try {
-          const res = await getWikiGraph(props.knowledgeBaseId, {
+          const res = await getWikiGraph(props.knowledgeBaseId, withWikiGraphScope({
             mode: 'ego',
             center: slug,
             depth: GRAPH_EGO_DEFAULT_DEPTH,
             limit: GRAPH_EGO_LIMIT,
             types: graphFilterTypesToArray(),
-          })
+          }, graphKnowledgeIDs.value))
           const data = (res as any).data || res as any
           if (data?.nodes) responses.push(data)
         } catch (e) {
@@ -3484,6 +3614,7 @@ async function growFrontier() {
     for (let i = 0; i < workerCount; i++) workers.push(worker())
     await Promise.all(workers)
 
+    if (sourceScopeKey !== graphKnowledgeScopeKey()) return
     if (responses.length === 0) return
 
     // All new arrivals belong to a single bloom generation — the user
@@ -3507,7 +3638,7 @@ async function growFrontier() {
     // and let the force simulation untangle them.
     renderGraph({ preserveLayout: true })
   } finally {
-    graphLoading.value = false
+    if (sourceScopeKey === graphKnowledgeScopeKey()) graphLoading.value = false
   }
 }
 
@@ -3748,7 +3879,12 @@ function renderGraph(opts: RenderGraphOpts = {}) {
   const data = graphData.value
   if (!container) return
   if (!data || !data.nodes?.length) {
+    if (graphAnimFrame) { cancelAnimationFrame(graphAnimFrame); graphAnimFrame = 0 }
     container.innerHTML = ''
+    graphNodes = []
+    graphNodeElsRef = []
+    graphEdgeElsRef = []
+    graphAdjacencyRef = new Map()
     return
   }
   const graph = data
@@ -4668,7 +4804,7 @@ async function handleGraphRemoteSearch(keyword: string) {
   const seq = ++graphSearchSeq
   graphSearchDebounce = setTimeout(async () => {
     try {
-      const res = await searchWikiPages(props.knowledgeBaseId, q, 20)
+      const res = await searchWikiPages(props.knowledgeBaseId, q, 20, graphKnowledgeScope())
       if (seq !== graphSearchSeq) return
       const pages: WikiPage[] = (res as any)?.data?.pages || (res as any)?.pages || []
       graphSearchOptions.value = pages.map(p => ({ label: p.title, value: p.slug }))
@@ -4706,6 +4842,11 @@ async function handleGraphSearchSelect(value: string) {
     await loadEgoGraph(value)
     node = graphNodes.find(n => n.slug === value)
     if (!node) {
+      if (graphKnowledgeIDs.value.length > 0) {
+        MessagePlugin.warning(t('knowledgeEditor.wikiBrowser.graphScopedPageUnavailable'))
+        setTimeout(() => { graphSearchValue.value = '' }, 300)
+        return
+      }
       // The slug truly does not exist in the KB (e.g. stale URL, deleted
       // page). loadEgoGraph will have surfaced the backend error in the
       // console; still open the drawer so the user sees the not-found
@@ -4767,7 +4908,7 @@ async function handleGraphSearchEnter(context: { inputValue: string }) {
   // network still pending). Run a one-shot search so Enter still navigates
   // somewhere useful rather than silently doing nothing.
   try {
-    const res = await searchWikiPages(props.knowledgeBaseId, value, 1)
+    const res = await searchWikiPages(props.knowledgeBaseId, value, 1, graphKnowledgeScope())
     const pages: WikiPage[] = (res as any)?.data?.pages || (res as any)?.pages || []
     if (pages.length > 0) {
       handleGraphSearchSelect(pages[0].slug)
@@ -4796,6 +4937,7 @@ watch(searchQuery, (val) => {
 
 watch(() => props.view, (v) => {
   if (v === 'graph') {
+    ensureGraphKnowledgeOptions()
     loadGraph()
   } else if (v === 'browser') {
     nextTick(async () => {
@@ -4803,6 +4945,20 @@ watch(() => props.view, (v) => {
         await hydrateProtectedFileImages(readerBodyRef.value, kbFileAccess.value)
       }
     })
+  }
+})
+
+watch(() => props.knowledgeBaseId, (nextID, previousID) => {
+  if (!nextID || nextID === previousID) return
+  graphKnowledgeIDs.value = []
+  graphKnowledgeOptions.value = []
+  graphKnowledgeSearchSeq += 1
+  graphSearchSeq += 1
+  graphSearchOptions.value = []
+  graphSearchDefaultOptions.value = []
+  if (props.view === 'graph') {
+    ensureGraphKnowledgeOptions()
+    void loadGraph()
   }
 })
 
@@ -4821,10 +4977,17 @@ watch(() => route.query.slug, (newSlug) => {
 onMounted(() => {
   loadPages()
   loadStats()
-  if (props.view === 'graph') loadGraph()
+  if (props.view === 'graph') {
+    ensureGraphKnowledgeOptions()
+    loadGraph()
+  }
 })
 
 onUnmounted(() => {
+  if (graphKnowledgeSearchTimer) {
+    clearTimeout(graphKnowledgeSearchTimer)
+    graphKnowledgeSearchTimer = null
+  }
   if (statsTimer) {
     clearInterval(statsTimer)
   }
@@ -6123,6 +6286,18 @@ onUnmounted(() => {
   width: 100%;
   box-shadow: var(--td-shadow-1);
   border-radius: 4px;
+}
+
+.wiki-graph-source-filter {
+  width: 100%;
+  box-shadow: var(--td-shadow-1);
+  border-radius: 4px;
+}
+
+.graph-source-select {
+  width: 100%;
+  background: var(--td-bg-color-container) !important;
+  opacity: 0.97;
 }
 
 .graph-issues-badge {
