@@ -7344,6 +7344,12 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
+                        "type": "string",
+                        "description": "Comma-separated source knowledge IDs (OR semantics)",
+                        "name": "knowledge_ids",
+                        "in": "query"
+                    },
+                    {
                         "type": "integer",
                         "description": "Max nodes to return (default 500, max 2000)",
                         "name": "limit",
@@ -8093,6 +8099,12 @@ const docTemplate = `{
                         "type": "integer",
                         "description": "Max results (default 10)",
                         "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Comma-separated source knowledge IDs (OR semantics)",
+                        "name": "knowledge_ids",
                         "in": "query"
                     }
                 ],

@@ -377,6 +377,7 @@ curl $BASE/api/v1/knowledgebase/kb-1/wiki/index -H "Authorization: Bearer $TOKEN
 | `center` | string | 否 | ego 模式中心 slug（ego 时必填） |
 | `depth` | int | 否 | 1-3，默认 1 |
 | `types` | string | 否 | page_type 过滤 |
+| `knowledge_ids` | string | 否 | 逗号分隔的资料 ID；SourceRefs 与任一 ID 相交时进入局部图谱，最多 100 个 |
 | `limit` | int | 否 | 默认 500，上限 2000 |
 
 响应：200 `WikiGraphData`
@@ -384,6 +385,15 @@ curl $BASE/api/v1/knowledgebase/kb-1/wiki/index -H "Authorization: Bearer $TOKEN
 ```bash
 curl "$BASE/api/v1/knowledgebase/kb-1/wiki/graph?mode=overview" -H "Authorization: Bearer $TOKEN"
 ```
+
+局部图谱示例：
+
+```bash
+curl "$BASE/api/v1/knowledgebase/kb-1/wiki/graph?mode=overview&knowledge_ids=doc-1,doc-2" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+局部图谱先按 `WikiPage.SourceRefs` 的资料 ID 交集筛选页面，再仅保留这些页面之间的链接并重算局部节点度数。多个资料 ID 为 OR 语义；不传 `knowledge_ids` 时保持全库图谱行为。该结果表示资料参与过页面生成，不能证明某条具体边由哪份资料产生。
 
 ### GET /api/v1/knowledgebase/:kb_id/wiki/stats
 
@@ -397,7 +407,7 @@ curl $BASE/api/v1/knowledgebase/kb-1/wiki/stats -H "Authorization: Bearer $TOKEN
 
 ### GET /api/v1/knowledgebase/:kb_id/wiki/search
 
-用途：页面搜索。查询参数：`q`（必填）、`limit`（默认 10）。
+用途：页面搜索。查询参数：`q`（必填）、`limit`（默认 10）、`knowledge_ids`（可选，语义与局部图谱一致）。
 
 响应：200 `{"pages":[WikiPage]}`
 

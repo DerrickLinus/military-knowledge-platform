@@ -1,4 +1,7 @@
 import { get, post, put, del } from "../../utils/request";
+import { buildWikiGraphQuery, type WikiGraphQueryParams } from './query';
+
+export { buildWikiGraphQuery, type WikiGraphQueryParams } from './query';
 
 // encodeSlugPath encodes each segment of a hierarchical wiki slug (e.g.
 // "foo/bar baz?") so the URL is safe while preserving the "/" separators
@@ -298,31 +301,13 @@ export function getWikiIndex(
   return get(`/api/v1/knowledgebase/${kbId}/wiki/index${suffix}`);
 }
 
-export interface WikiGraphQueryParams {
-  mode?: 'overview' | 'ego';
-  center?: string;
-  depth?: number;
-  types?: string[];
-  limit?: number;
-}
-
 // getWikiGraph fetches a slice of the wiki link graph. Without params the
 // backend returns the top-500 most-connected pages (overview mode). Pass
 // `mode: 'ego', center: <slug>` to drill into a specific page's neighborhood.
 // For knowledge bases with tens of thousands of pages the overview cap is
 // what prevents the browser from choking on a 30MB payload / 100k SVG nodes.
 export function getWikiGraph(kbId: string, params?: WikiGraphQueryParams) {
-  const query = new URLSearchParams();
-  if (params) {
-    if (params.mode) query.set('mode', params.mode);
-    if (params.center) query.set('center', params.center);
-    if (params.depth !== undefined) query.set('depth', String(params.depth));
-    if (params.limit !== undefined) query.set('limit', String(params.limit));
-    if (params.types && params.types.length > 0) {
-      query.set('types', params.types.join(','));
-    }
-  }
-  const qs = query.toString();
+  const qs = buildWikiGraphQuery(params);
   return get(`/api/v1/knowledgebase/${kbId}/wiki/graph${qs ? '?' + qs : ''}`);
 }
 
@@ -330,9 +315,12 @@ export function getWikiStats(kbId: string) {
   return get(`/api/v1/knowledgebase/${kbId}/wiki/stats`);
 }
 
-export function searchWikiPages(kbId: string, q: string, limit?: number) {
+export function searchWikiPages(kbId: string, q: string, limit?: number, knowledgeIds?: string[]) {
   const params = new URLSearchParams({ q });
   if (limit) params.set('limit', String(limit));
+  if (knowledgeIds && knowledgeIds.length > 0) {
+    params.set('knowledge_ids', knowledgeIds.join(','));
+  }
   return get(`/api/v1/knowledgebase/${kbId}/wiki/search?${params.toString()}`);
 }
 

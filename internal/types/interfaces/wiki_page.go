@@ -204,6 +204,9 @@ type WikiPageService interface {
 
 	// SearchPages performs full-text search over wiki pages.
 	SearchPages(ctx context.Context, kbID string, query string, limit int) ([]*types.WikiPage, error)
+	// SearchPagesByKnowledgeIDs performs the same search within the induced
+	// source-document scope used by the Wiki graph.
+	SearchPagesByKnowledgeIDs(ctx context.Context, kbID string, query string, knowledgeIDs []string, limit int) ([]*types.WikiPage, error)
 
 	// ListRevisions returns the stored historical snapshots for a page
 	// (newest first, content omitted) plus the total snapshot count and the
@@ -274,6 +277,9 @@ type WikiPageRepository interface {
 
 	// ListBySourceRef retrieves all wiki pages that reference a given source knowledge ID.
 	ListBySourceRef(ctx context.Context, kbID string, sourceKnowledgeID string) ([]*types.WikiPage, error)
+	// SearchByKnowledgeIDs searches wiki pages whose source_refs intersect any
+	// of the supplied knowledge IDs.
+	SearchByKnowledgeIDs(ctx context.Context, kbID string, query string, knowledgeIDs []string, limit int) ([]*types.WikiPage, error)
 
 	// ListSlugsBySourceRef returns just the slugs of pages that reference
 	// the given knowledge id. Same predicate as ListBySourceRef but
