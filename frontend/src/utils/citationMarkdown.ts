@@ -41,7 +41,8 @@ export type CitationKnowledgeRef = {
   knowledge_base_id?: string
 }
 
-function parseTagAttributes(attrString: string): Record<string, string> {
+/** Parse `key="value"` attributes from a citation tag body. Shared with export. */
+export function parseTagAttributes(attrString: string): Record<string, string> {
   const attributes: Record<string, string> = {}
   if (!attrString) return attributes
   ATTRIBUTE_REGEX.lastIndex = 0
@@ -73,7 +74,8 @@ function normalizeDocTitle(title: string): string {
   return title.trim().toLowerCase()
 }
 
-function docTitlesMatch(a: string, b: string): boolean {
+/** Loose document-title match used for citation → chunk resolution. Shared with export. */
+export function docTitlesMatch(a: string, b: string): boolean {
   if (!a || !b) return false
   const na = normalizeDocTitle(a)
   const nb = normalizeDocTitle(b)

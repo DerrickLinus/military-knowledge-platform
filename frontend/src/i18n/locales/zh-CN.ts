@@ -3345,6 +3345,21 @@ export default {
     memoryForgotten: '已删除这条记忆',
     memoryForgetFailed: '删除失败',
     memoryHint: '这些是助手在回答时看到的长期记忆，删除后不会再被使用。',
+    answerExport: {
+      buttonTitle: '导出回答',
+      word: 'Word (.docx)',
+      markdown: 'Markdown (.md)',
+      emptyContent: '当前回答为空，无法导出',
+      success: '导出完成，已开始下载',
+      failed: '导出失败，请重试',
+      docLabels: {
+        question: '问题',
+        answer: '回答',
+        sources: '引用来源',
+        unresolvedCitation: '未匹配来源',
+        imageLabel: '图片'
+      }
+    },
     suggestedQuestions: '你可以这样问我',
     followUpQuestions: '继续问',
     followUpQuestionsLoading: '加载推荐问题',

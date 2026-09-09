@@ -3364,6 +3364,21 @@ export default {
     memoryForgotten: 'Memory deleted',
     memoryForgetFailed: 'Failed to delete',
     memoryHint: 'These are the long-term memories this answer saw. Deleting one stops it from being used again.',
+    answerExport: {
+      buttonTitle: 'Export answer',
+      word: 'Word (.docx)',
+      markdown: 'Markdown (.md)',
+      emptyContent: 'The answer is empty, nothing to export',
+      success: 'Export finished, download started',
+      failed: 'Export failed, please retry',
+      docLabels: {
+        question: 'Question',
+        answer: 'Answer',
+        sources: 'Sources',
+        unresolvedCitation: 'Unmatched source',
+        imageLabel: 'Image'
+      }
+    },
     suggestedQuestions: 'You can ask me',
     followUpQuestions: 'Keep asking',
     followUpQuestionsLoading: 'Loading suggested questions',

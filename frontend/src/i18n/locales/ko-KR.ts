@@ -3343,6 +3343,21 @@ export default {
     memoryForgotten: '기억을 삭제했습니다',
     memoryForgetFailed: '삭제 실패',
     memoryHint: '이 답변이 참고한 장기 기억입니다. 삭제하면 다시 사용되지 않습니다.',
+    answerExport: {
+      buttonTitle: '답변 내보내기',
+      word: 'Word (.docx)',
+      markdown: 'Markdown (.md)',
+      emptyContent: '답변이 비어 있어 내보낼 수 없습니다',
+      success: '내보내기가 완료되어 다운로드를 시작했습니다',
+      failed: '내보내기에 실패했습니다. 다시 시도해 주세요',
+      docLabels: {
+        question: '질문',
+        answer: '답변',
+        sources: '출처',
+        unresolvedCitation: '일치하지 않는 출처',
+        imageLabel: '이미지'
+      }
+    },
     suggestedQuestions: '이렇게 물어보세요',
     followUpQuestions: '이어서 질문',
     followUpQuestionsLoading: '추천 질문 로딩 중',
