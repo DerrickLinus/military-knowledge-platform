@@ -7,6 +7,8 @@
 > - 私有仓库远程：`origin`（`DerrickLinus/military-knowledge-platform`）
 > - 腾讯上游远程：`upstream`（`Tencent/WeKnora`）
 
+> 2026-09-08 更新：生产前端已改为 Docker 多阶段构建，无需宿主机预生成 `frontend/dist`。文中的 WK-001 测试用例和备份标签是该功能的示例，其他功能应替换为对应编号；合入上游后的数据库迁移不能套用 WK-001“无迁移”的假设。
+
 ## 1. 先理解三个彼此独立的概念
 
 ### 1.1 Git worktree
@@ -121,13 +123,15 @@ git check-ignore -v .env
 
 原 `WeKnora` 目录之所以不需要 Node，是因为它运行的是已经构建好的前端镜像。
 
-当前 worktree 包含前端源码修改，必须执行一次前端编译，但可以使用临时 Linux Node 容器完成：
+当前 `frontend/Dockerfile` 使用多阶段构建，在 builder 阶段自动执行 `npm ci` 和 `npm run build`，再把生成的静态资源复制到 nginx 镜像。直接构建 frontend 镜像即可，不需要手动预构建宿主机的 `frontend/dist`。
+
+运行前端测试、类型检查或 Vite 热更新时，仍可使用临时 Linux Node 容器：
 
 ```text
 node:24-bookworm 镜像：第一次会下载，以后由 Docker 缓存
 一次性 Node 容器：命令结束后由 --rm 自动删除
 frontend/node_modules：保存在当前 worktree 中
-frontend/dist：保存在当前 worktree 中，供 frontend/Dockerfile 使用
+frontend/dist：仅手动运行构建时生成，不是 Docker 镜像构建的输入
 ```
 
 这不会把 Node 安装到 WSL，也不会影响其他 worktree。
@@ -182,7 +186,7 @@ go test ./internal/application/repository ./internal/types/interfaces ./internal
 
 ### 4.3 首次安装当前 worktree 的前端依赖
 
-第一次进入这个 worktree，或 `frontend/package-lock.json` 发生变化时执行：
+需要在 worktree 中运行测试、类型检查或 Vite，且尚未安装依赖或 `frontend/package-lock.json` 发生变化时执行。仅构建生产镜像不需要这一步：
 
 ```bash
 cd /home/dlh/projects/WeKnora-WK-001
@@ -210,30 +214,25 @@ docker run --rm \
   bash -lc 'npm test -- src/views/knowledge/wiki/wikiGraphScope.test.ts src/views/knowledge/wiki/WikiBrowser.sourceScope.test.mjs && npm run type-check'
 ```
 
-### 4.5 构建前端静态资源
+### 4.5 构建前端生产镜像
 
-只要前端代码发生变化，就应在构建 frontend 镜像前重新执行：
-
-```bash
-docker run --rm \
-  --user "$(id -u):$(id -g)" \
-  -e npm_config_cache=/tmp/npm-cache \
-  -e NODE_OPTIONS="--max-old-space-size=6144" \
-  -e VITE_IS_DOCKER=true \
-  -e VITE_FRONTEND_COMMIT="$(git rev-parse --short HEAD)" \
-  -v "$PWD:/workspace" \
-  -w /workspace/frontend \
-  node:24-bookworm \
-  bash -lc 'npm run build'
-```
-
-`NODE_OPTIONS="--max-old-space-size=6144"` 把 V8 堆上限提高到 6 GB。不加这一项时，vite 打包会超过 Node 默认堆上限（本机约 3.5 GB）触发 `OOMErrorHandler` 崩溃；本机物理内存 7.8 GB，6 GB 上限加 swap 足够容纳。
-
-验证构建产物：
+前端代码变化后，直接构建镜像。Dockerfile 会在容器内安装依赖并编译，无需先执行宿主机 `npm run build`：
 
 ```bash
-test -f frontend/dist/index.html && echo "前端构建成功"
+docker compose -p weknora --env-file .env -f docker-compose.yml \
+  build --build-arg VITE_FRONTEND_COMMIT="$(git rev-parse --short HEAD)" frontend
 ```
+
+当前 Dockerfile 默认 `NODE_MAX_OLD_SPACE_SIZE=4096`（MB）。出现堆内存不足时，可在确认 Docker 可用内存后增加 `--build-arg NODE_MAX_OLD_SPACE_SIZE=6144`。不要把既往机器的内存设置当成所有环境的固定要求。
+
+验证镜像中存在静态入口：
+
+```bash
+docker run --rm --entrypoint sh wechatopenai/weknora-ui:latest \
+  -c 'test -s /usr/share/nginx/html/index.html'
+```
+
+构建成功不等于类型检查或测试通过，第 4.4 节仍应按改动范围执行。镜像名示例使用默认 `latest`；设置了 `WEKNORA_VERSION` 时应使用实际标签。
 
 ## 5. 首次替换 app/frontend 前备份原镜像
 
@@ -259,6 +258,14 @@ echo "原镜像已备份"
 
 备份镜像不包含数据库；数据库仍然保存在 Docker Volume 中，替换 app/frontend 不会删除它。
 
+### 5.1 合入上游后先备份数据库
+
+新 app 启动可能执行数据库迁移。存在迁移时，先暂停应用写入，使用 `pg_dump -Fc` 备份业务数据库、`pg_dumpall --globals-only` 备份角色，再用 `pg_restore --list` 检查归档目录。备份应保存在仓库外、限制文件权限；目录可读取不等于已完成恢复演练。
+
+启用 Neo4j 时应使用离线 dump 或停止 Neo4j 后备份其数据卷；上传文件也应保留对应数据卷备份。备份完成后恢复依赖服务，再更新 app/frontend。不要删除原 Volume。
+
+镜像标签适合本地快速回滚，也可用 `docker image save --output <备份路径> <备份标签...>` 另存离线镜像。发生数据库迁移后，只换回旧镜像不一定兼容，需评估是否一并恢复数据库备份；恢复操作会覆盖备份之后的新数据。
+
 ## 6. 从当前 worktree 构建并运行 app/frontend
 
 ### 6.1 构建镜像
@@ -272,7 +279,10 @@ docker compose \
   -p weknora \
   --env-file .env \
   -f docker-compose.yml \
-  build app frontend
+  build \
+  --build-arg VITE_FRONTEND_COMMIT="$(git rev-parse --short HEAD)" \
+  --build-arg COMMIT_ID_ARG="$(git rev-parse --short HEAD)" \
+  app frontend
 ```
 
 如果只修改后端：
@@ -281,10 +291,11 @@ docker compose \
 docker compose -p weknora --env-file .env -f docker-compose.yml build app
 ```
 
-如果只修改前端，先重新执行 `npm run build`，然后：
+如果只修改前端，直接执行（已完成第 4.5 节且源码未变化时无需重复构建）：
 
 ```bash
-docker compose -p weknora --env-file .env -f docker-compose.yml build frontend
+docker compose -p weknora --env-file .env -f docker-compose.yml \
+  build --build-arg VITE_FRONTEND_COMMIT="$(git rev-parse --short HEAD)" frontend
 ```
 
 `docker compose build` 只在本机构建镜像，不会 push 到 Docker Hub。
@@ -483,17 +494,8 @@ docker compose -p weknora --env-file .env -f docker-compose.yml \
 执行：
 
 ```bash
-docker run --rm \
-  --user "$(id -u):$(id -g)" \
-  -e npm_config_cache=/tmp/npm-cache \
-  -e VITE_IS_DOCKER=true \
-  -e VITE_FRONTEND_COMMIT="$(git rev-parse --short HEAD)" \
-  -v "$PWD:/workspace" \
-  -w /workspace/frontend \
-  node:24-bookworm \
-  bash -lc 'npm run build'
-
-docker compose -p weknora --env-file .env -f docker-compose.yml build frontend
+docker compose -p weknora --env-file .env -f docker-compose.yml \
+  build --build-arg VITE_FRONTEND_COMMIT="$(git rev-parse --short HEAD)" frontend
 docker compose -p weknora --env-file .env -f docker-compose.yml \
   up -d --no-deps --force-recreate frontend
 ```
@@ -505,10 +507,9 @@ docker compose -p weknora --env-file .env -f docker-compose.yml \
 重新运行：
 
 1. 后端和前端定向测试；
-2. `npm run build`；
-3. `docker compose build app frontend`；
-4. `up -d --no-deps --force-recreate app frontend`；
-5. 浏览器回归验证。
+2. `docker compose build app frontend`（沿用第 6 节项目参数，并注入前端提交号，静态资源在镜像内编译）；
+3. `up -d --no-deps --force-recreate app frontend`；
+4. 浏览器回归验证。
 
 ### 8.5 什么情况下需要重新执行 `npm ci`
 
@@ -800,7 +801,7 @@ cp -p /home/dlh/projects/WeKnora/.env .env
 chmod 600 .env
 ```
 
-如果该功能包含前端代码，再为这个 worktree 执行一次 `npm ci`。Docker 中的 `node:24-bookworm` 镜像可以复用，不会重复下载；但每个 worktree 的 `frontend/node_modules` 是独立的，磁盘成本不小，任务完成、合并后用 `git worktree remove` 清理。
+如果需要前端测试或 Vite，再为这个 worktree 执行一次 `npm ci`；仅构建生产镜像不需要。Docker 中的 `node:24-bookworm` 镜像可以复用；每个 worktree 的 `frontend/node_modules` 是独立的，任务完成、合并后用 `git worktree remove` 清理。
 
 ### 12.4 是否每个 worktree 都要替换 app/frontend
 
@@ -830,9 +831,9 @@ chmod 600 .env
 | 场景 | 需要做什么 |
 |---|---|
 | 下次打开 worktree，代码未改变 | 检查容器和 health，直接打开 `http://localhost` |
-| 首次创建 worktree | 复制 `.env`；前端功能执行一次 `npm ci` |
+| 首次创建 worktree | 复制 `.env`；前端测试或 Vite 需要执行一次 `npm ci` |
 | 修改 Go 后端 | 后端测试 → build app → recreate app |
-| 修改 Vue/TS 前端 | 前端测试 → npm build → build frontend → recreate frontend |
+| 修改 Vue/TS 前端 | 前端测试 → build frontend（镜像内编译）→ recreate frontend |
 | 前后端都修改 | 两侧测试 → 构建两侧 → recreate app/frontend → 浏览器回归 |
 | 只修改文档 | 文档检查即可，不重建 Docker |
 | push 功能分支 | 不需要 push Docker 镜像 |
@@ -870,8 +871,8 @@ chmod 600 /home/dlh/projects/WeKnora-WK-001/.env
 
 依次检查：
 
-1. 是否重新执行了前端 `npm run build`；
-2. 是否重新执行了 `docker compose build frontend`；
+1. 是否从目标分支和 worktree 构建；
+2. 是否成功执行了 `docker compose build frontend`（包含静态资源编译）；
 3. 是否使用 `--force-recreate frontend`；
 4. 浏览器是否强制刷新；
 5. `docker inspect WeKnora-frontend` 的 working directory 是否指向当前 worktree。
