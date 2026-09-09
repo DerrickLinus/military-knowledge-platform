@@ -52,6 +52,11 @@
                     :title="$t('agent.addToKnowledgeBase')">
                     <t-icon name="bookmark-add" />
                 </t-button>
+                <!-- WK-002: export the finished answer as Word/Markdown.
+                     Embedded pages stay out of the first version by design. -->
+                <AnswerExportMenu v-if="!embeddedMode" :question="userQuery"
+                    :answer="content || session?.content || ''" :references="session?.knowledge_references"
+                    :message-id="messageIdForArtifacts" />
                 <!-- Skill artifact download: only shown when this reply's
                      assistant message actually recorded any generated files.
                      Emptiness is the default: the button stays hidden for
@@ -107,6 +112,7 @@ import 'katex/dist/katex.min.css';
 import docInfo from './docInfo.vue';
 import deepThink from './deepThink.vue';
 import AgentStreamDisplay from './AgentStreamDisplay.vue';
+import AnswerExportMenu from './AnswerExportMenu.vue';
 import RagPipelineProgress from './RagPipelineProgress.vue';
 import ChatRequestInfoButton from '@/components/ChatRequestInfoButton.vue';
 import ChatCitationFloat from '@/components/ChatCitationFloat.vue';

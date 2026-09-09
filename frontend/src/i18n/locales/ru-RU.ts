@@ -3343,6 +3343,21 @@ export default {
     memoryForgotten: 'Запись удалена',
     memoryForgetFailed: 'Не удалось удалить',
     memoryHint: 'Это записи долговременной памяти, которые видел этот ответ. Удалённая запись больше не используется.',
+    answerExport: {
+      buttonTitle: 'Экспорт ответа',
+      word: 'Word (.docx)',
+      markdown: 'Markdown (.md)',
+      emptyContent: 'Ответ пуст — нечего экспортировать',
+      success: 'Экспорт завершён, загрузка началась',
+      failed: 'Не удалось выполнить экспорт, попробуйте ещё раз',
+      docLabels: {
+        question: 'Вопрос',
+        answer: 'Ответ',
+        sources: 'Источники',
+        unresolvedCitation: 'Источник не определён',
+        imageLabel: 'Изображение'
+      }
+    },
     suggestedQuestions: 'Вы можете спросить меня',
     followUpQuestions: 'Спрашивайте дальше',
     followUpQuestionsLoading: 'Загрузка рекомендуемых вопросов',

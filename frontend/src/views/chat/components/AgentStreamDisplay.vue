@@ -385,6 +385,11 @@
                   :title="$t('agent.addToKnowledgeBase')">
                   <t-icon name="bookmark-add" />
                 </t-button>
+                <!-- WK-002: export the finished answer as Word/Markdown. Uses
+                     the answer event content directly — the thinking fallback
+                     in getActualContent must not leak into exported files. -->
+                <AnswerExportMenu :question="userQuery" :answer="event.content"
+                  :references="exportReferences" :message-id="messageIdForArtifacts" />
                 <!-- Skill artifact download: only shown when the persisted
                      assistant message recorded any generated files. Agent
                      mode is the primary path for skills, so this is where
@@ -598,6 +603,7 @@ import ChatRequestInfoButton from '@/components/ChatRequestInfoButton.vue';
 import ChatCitationFloat from '@/components/ChatCitationFloat.vue';
 import picturePreview from '@/components/picture-preview.vue';
 import ChatArtifactsDrawer from './ChatArtifactsDrawer.vue';
+import AnswerExportMenu from './AnswerExportMenu.vue';
 import { isCollectingSkillArtifacts } from '@/utils/skillArtifacts';
 import { useArtifactArriveMotion } from '@/composables/useArtifactArriveMotion';
 import ChatMemoryStep from './ChatMemoryStep.vue';
@@ -1088,6 +1094,11 @@ const openReferencesDrawer = (
   })
   return true
 }
+
+// WK-002: references for answer export follow the same aggregation rules as the
+// drawer (message-level aggregate first, tool-event replay for restored agent
+// messages without the aggregate).
+const exportReferences = computed(() => getReferencesForDrawer());
 
 const mergeDocumentReferences = (refs: KnowledgeReferenceLike[]): KnowledgeReferenceLike[] => {
   const merged = new Map<string, KnowledgeReferenceLike & { contentParts?: string[] }>();
