@@ -67,11 +67,12 @@ type KnowledgeBaseService interface {
 	//   - name: New knowledge base name
 	//   - description: New knowledge base description
 	//   - config: Knowledge base configuration, including chunking strategy, vectorization settings, etc.
+	//   - vlmConfig: Optional multimodal (vision) config; nil means no change
 	// Returns:
 	//   - Updated knowledge base object
 	//   - Possible errors such as not existing, insufficient permissions, etc.
 	UpdateKnowledgeBase(ctx context.Context,
-		id string, name string, description string, config *types.KnowledgeBaseConfig,
+		id string, name string, description string, config *types.KnowledgeBaseConfig, vlmConfig *types.VLMConfig,
 	) (*types.KnowledgeBase, error)
 
 	// DeleteKnowledgeBase deletes a knowledge base
@@ -94,6 +95,12 @@ type KnowledgeBaseService interface {
 	//   - List of search results, sorted by relevance
 	//   - Possible errors such as not existing, insufficient permissions, search engine errors, etc.
 	HybridSearch(ctx context.Context, id string, params types.SearchParams) ([]*types.SearchResult, error)
+
+	// HybridSearchWithRerank is HybridSearch plus the optional rerank stage
+	// requested by params.Rerank, returning rerank diagnostics beside the
+	// results. It serves the hybrid-search API; internal callers rerank on
+	// their own and use HybridSearch.
+	HybridSearchWithRerank(ctx context.Context, id string, params types.SearchParams) (*types.RetrievalResult, error)
 
 	// GetQueryEmbedding computes the query embedding using the embedding model
 	// associated with the given knowledge base. This allows callers to pre-compute
@@ -238,6 +245,10 @@ type KnowledgeBaseRepository interface {
 	SetUserKBPin(
 		ctx context.Context, tenantID uint64, userID string, kbID string, pinned bool,
 	) (pinnedAt *time.Time, err error)
+	// UpdateKnowledgeBaseGeneratedProfile writes only the generated_profile
+	// column so a background regeneration never races a concurrent settings
+	// save on the rest of the row.
+	UpdateKnowledgeBaseGeneratedProfile(ctx context.Context, id string, profile *types.KnowledgeBaseProfile) error
 
 	// ListUserKBPinIDs returns the kb_id → pinned_at map of every KB the
 	// given user has personally pinned in this tenant. Used by the list

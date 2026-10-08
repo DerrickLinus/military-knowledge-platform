@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime/debug"
 	"sort"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/Tencent/WeKnora/internal/common"
@@ -16,6 +18,8 @@ import (
 type ToolRegistry struct {
 	tools             map[string]types.Tool
 	deferred          map[string]bool
+	mcpDirect         bool // Full exposure is an explicit compatibility path.
+	mcpPrepared       bool
 	maxToolOutputSize int // maximum chars for tool output (0 = use DefaultMaxToolOutput)
 }
 
@@ -82,6 +86,24 @@ func (r *ToolRegistry) GetTool(name string) (types.Tool, error) {
 		return nil, fmt.Errorf("tool not found: %s", name)
 	}
 	return tool, nil
+}
+
+type sessionBinder interface {
+	BindSession(id string)
+}
+
+// BindSession tells sandbox tools which session's layout to advertise in
+// Description() and Parameters(). Host adapters refuse an empty session ID.
+func (r *ToolRegistry) BindSession(id string) {
+	if r == nil {
+		return
+	}
+	id = strings.TrimSpace(id)
+	for _, tool := range r.tools {
+		if binder, ok := tool.(sessionBinder); ok {
+			binder.BindSession(id)
+		}
+	}
 }
 
 // ListTools returns all registered tool names sorted alphabetically.
@@ -165,6 +187,13 @@ func (r *ToolRegistry) ExecuteTool(
 		}, err
 	}
 
+	if direct, ok := tool.(*MCPRegisteredTool); ok {
+		// Authorization precedes schema validation: even parameter-error details
+		// must not expose another engine principal's registered tool definition.
+		if err := direct.catalog.authorize(ctx); err != nil {
+			return mcpDiscoveryFailure(err, "unavailable")
+		}
+	}
 	return r.execute(ctx, tool, args)
 }
 
@@ -192,6 +221,9 @@ func (r *ToolRegistry) execute(ctx context.Context, tool types.Tool, args json.R
 	}
 	if len(validationErrs) > 0 {
 		errMsg := FormatValidationErrors(validationErrs)
+		if name == ToolCallMCPTool {
+			errMsg += mcpCallArgumentsHint
+		}
 		if name == ToolWriteSandboxFile {
 			errMsg += writeSandboxMissingFieldHint
 		}
@@ -216,7 +248,7 @@ func (r *ToolRegistry) execute(ctx context.Context, tool types.Tool, args json.R
 			maxOutput = toolLimit
 		}
 	}
-	result, execErr := tool.Execute(WithOutputBudget(ctx, maxOutput), args)
+	result, execErr := executeRecovered(WithOutputBudget(ctx, maxOutput), tool, args)
 	if result == nil {
 		result = &types.ToolResult{Success: false, Error: "tool returned no result"}
 	}
@@ -257,6 +289,29 @@ func (r *ToolRegistry) execute(ctx context.Context, tool types.Tool, args json.R
 	}
 
 	return result, execErr
+}
+
+// executeRecovered runs one tool and turns a panic into a failed result. Tools
+// run on errgroup goroutines when a round executes in parallel, and errgroup
+// does not carry a panic back to Wait: an unrecovered one from any tool (MCP
+// clients, sandboxes, third-party SDKs) would take down the whole server.
+//
+// recover only covers the goroutine that calls it, so this guards the
+// tool.Execute call alone: a goroutine a tool starts for itself must install
+// its own barrier (GoRecovered / RecoverGoroutine in goroutine.go).
+func executeRecovered(
+	ctx context.Context, tool types.Tool, args json.RawMessage,
+) (result *types.ToolResult, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Errorf(ctx, "[ToolRegistry] Tool %s panicked: %v\n%s", tool.Name(), r, debug.Stack())
+			// The panic value can carry internals (paths, addresses); the
+			// model and the user only need to know the call did not complete.
+			err = fmt.Errorf("tool %s failed with an internal error", tool.Name())
+			result = &types.ToolResult{Success: false, Error: err.Error()}
+		}
+	}()
+	return tool.Execute(ctx, args)
 }
 
 // Cleanup cleans up all registered tools that implement the types.Cleanable interface.
